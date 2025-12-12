@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir /b \"C:\\Users\\lyyud\\projects\\swar-sky\")",
+      "WebSearch",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(tree:*)",
+      "Bash(godot:*)",
+      "Bash(timeout 10 godot:*)",
+      "Bash(echo:*)",
+      "Bash(ls:*)",
+      "Bash(timeout 15 godot:*)",
+      "Bash(timeout 20 godot:*)",
+      "Bash(git init:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
