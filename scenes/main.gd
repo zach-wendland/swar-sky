@@ -41,6 +41,9 @@ const VIEW_NAMES: Dictionary = {
 
 
 func _ready() -> void:
+	if _try_run_web_e2e():
+		return
+
 	# Initialize the seed stack
 	SeedStack.initialize_from_string("swar-sky-alpha-001")
 
@@ -49,6 +52,52 @@ func _ready() -> void:
 
 	# Start with galaxy map
 	_show_galaxy_map()
+
+func _try_run_web_e2e() -> bool:
+	if not OS.has_feature("web"):
+		return false
+
+	var enabled: bool = false
+	var enabled_raw: Variant = JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('e2e')")
+	if enabled_raw != null:
+		var s := str(enabled_raw)
+		enabled = s != "" and s != "0" and s.to_lower() != "false"
+
+	if not enabled:
+		return false
+
+	var config := TerrainGenerator.create_config(77777, SystemGenerator.PlanetType.TEMPERATE)
+	var resolution := 33
+	var tiles_to_generate := 3
+
+	var start_usec := Time.get_ticks_usec()
+	for i in range(tiles_to_generate):
+		var _tile := TerrainGenerator.generate_tile(config, Vector2i(i, 0), 0, resolution)
+	var elapsed_usec := Time.get_ticks_usec() - start_usec
+
+	var per_tile_ms := (float(elapsed_usec) / 1000.0) / float(tiles_to_generate)
+
+	var profiled_tile := TerrainGenerator.generate_tile(config, Vector2i(999, 0), 0, resolution, true)
+	var hash_calls := 0
+	if profiled_tile.profile != null:
+		hash_calls = profiled_tile.profile.hash_calls
+
+	var result := {
+		"resolution": resolution,
+		"tiles": tiles_to_generate,
+		"elapsed_ms": float(elapsed_usec) / 1000.0,
+		"per_tile_ms": per_tile_ms,
+		"hash_calls": hash_calls,
+	}
+
+	var json: String = JSON.stringify(result)
+	print("[E2E] RESULT ", json)
+
+	var json_literal: String = JSON.stringify(json) # quoted JS string literal
+	JavaScriptBridge.eval("window.__SWAR_E2E_RESULT__ = JSON.parse(" + json_literal + ");")
+	JavaScriptBridge.eval("window.__SWAR_E2E_DONE__ = true;")
+
+	return true
 
 
 func _create_view_indicator() -> void:
