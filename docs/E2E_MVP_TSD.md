@@ -9,6 +9,9 @@ This document specifies the technical implementation for the MVP â€œplanet runâ€
 - Objective system and HUD integration
 - Test strategy: headless Godot + Playwright web E2E
 
+Explicitly out of scope for MVP:
+- Audio (SFX/music/VO). The runtime should not require audio nodes, bus configs, or user-gesture audio unlocks (web).
+
 ## 2) Current Code Map (by package)
 
 - `packages/core`

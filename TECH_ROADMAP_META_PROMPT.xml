@@ -51,7 +51,7 @@
       Multiplayer is optional for v1. If included, use Colyseus (Node) for prototyping, with a path to authoritative Rust/Go services later.
     </server>
     <assets>
-      Blender → glTF; textures via KTX2/Basis; audio via WebAudio (FMOD/Wwise only if native builds later).
+      Blender → glTF; textures via KTX2/Basis; audio is deferred for MVP (silent build) and can later use WebAudio (FMOD/Wwise only if native builds later).
     </assets>
   </technologyStack>
 
@@ -112,4 +112,3 @@
     <criterion>Vertical slice delivers a playable loop (space → landing → ground mission → rewards).</criterion>
   </qualityBar>
 </metaPrompt>
-
