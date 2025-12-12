@@ -140,26 +140,59 @@ func _run_web_e2e_mission() -> void:
 		collected = artifacts
 	)
 
-	planet_surface.initialize(planet_seed, planet_type, planet_name, null)
+	planet_surface.call_deferred("initialize", planet_seed, planet_type, planet_name, null)
+
+	var error: String = ""
+
+	var init_timeout_ms: int = 30_000
+	var init_start_ms: int = Time.get_ticks_msec()
+	while not bool(planet_surface.has_meta(&"web_e2e_initialized")) and (Time.get_ticks_msec() - init_start_ms) < init_timeout_ms:
+		await get_tree().process_frame
+
+	if not bool(planet_surface.has_meta(&"web_e2e_initialized")):
+		error = "init_timeout"
+
+	# Fallback: if we didn't receive the meta marker, wait a couple of frames and continue with null checks below.
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-	var error: String = ""
 	var step_discovered: bool = false
 	var step_collected: bool = false
 	var step_boarded: bool = false
 	var poi_name: String = ""
 
-	if planet_surface.pois == null or planet_surface.pois.is_empty():
+	var objective_types := {
+		"start": -1,
+		"after_discover": -1,
+		"after_collect": -1,
+	}
+
+	if error == "" and (planet_surface.pois == null or planet_surface.pois.is_empty()):
 		error = "no_pois_generated"
-	elif planet_surface.poi_renderer == null:
+	elif error == "" and planet_surface.poi_renderer == null:
 		error = "poi_renderer_missing"
-	elif planet_surface.objective_system == null:
+	elif error == "" and planet_surface.objective_system == null:
 		error = "objective_system_missing"
-	elif planet_surface.ship_landing == null:
+	elif error == "" and planet_surface.ship_landing == null:
 		error = "ship_landing_missing"
-	elif planet_surface.character == null:
+	elif error == "" and planet_surface.character == null:
 		error = "character_missing"
+
+	if error == "":
+		var active0 = planet_surface.objective_system.get_active_objective()
+		objective_types["start"] = int(active0.objective_type) if active0 != null else -1
+
+		var expected_explore: int = int(planet_surface.objective_system.ObjectiveType.EXPLORE_POI)
+		if objective_types["start"] != expected_explore:
+			error = "unexpected_start_objective"
+
+	if error == "":
+		# Sanity: you cannot leave before collecting.
+		var ship_pos0: Vector3 = planet_surface.ship_spawn_position
+		planet_surface.ship_landing.update_player_position(ship_pos0)
+		planet_surface.objective_system.update_player_position(ship_pos0)
+		if bool(planet_surface.objective_system.can_leave_planet()):
+			error = "left_allowed_before_collect"
 
 	if error == "":
 		var poi = planet_surface.pois[0]
@@ -173,6 +206,12 @@ func _run_web_e2e_mission() -> void:
 		step_discovered = bool(poi.discovered)
 		if not step_discovered:
 			error = "poi_not_discovered"
+		else:
+			var active1 = planet_surface.objective_system.get_active_objective()
+			objective_types["after_discover"] = int(active1.objective_type) if active1 != null else -1
+			var expected_collect: int = int(planet_surface.objective_system.ObjectiveType.COLLECT_ARTIFACT)
+			if objective_types["after_discover"] != expected_collect:
+				error = "unexpected_collect_objective"
 
 	if error == "":
 		var poi = planet_surface.pois[0]
@@ -185,6 +224,12 @@ func _run_web_e2e_mission() -> void:
 		step_collected = collected_ok and bool(poi.artifact_collected)
 		if not step_collected:
 			error = "artifact_not_collected"
+		else:
+			var active2 = planet_surface.objective_system.get_active_objective()
+			objective_types["after_collect"] = int(active2.objective_type) if active2 != null else -1
+			var expected_return: int = int(planet_surface.objective_system.ObjectiveType.RETURN_TO_SHIP)
+			if objective_types["after_collect"] != expected_return:
+				error = "unexpected_return_objective"
 
 	if error == "":
 		var ship_pos: Vector3 = planet_surface.ship_spawn_position
@@ -224,6 +269,7 @@ func _run_web_e2e_mission() -> void:
 			"boarded": step_boarded,
 		},
 		"artifacts": collected,
+		"objective_types": objective_types,
 	})
 
 
@@ -329,7 +375,8 @@ func _show_planet_surface(planet_data: Dictionary) -> void:
 	planet_surface.back_requested.connect(_on_back_to_space)
 
 	# Initialize planet
-	planet_surface.initialize(
+	planet_surface.call_deferred(
+		"initialize",
 		planet_data["seed"],
 		planet_data["type"],
 		planet_data["name"],

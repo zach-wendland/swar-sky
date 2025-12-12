@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=3 uid="uid://system_space_scene"]
 
-[ext_resource type="Script" path="res://scenes/system_space/system_space.gd" id="1" uid="uid://system_space_script"]
-[ext_resource type="Script" path="res://packages/gameplay/ship_controller.gd" id="2" uid="uid://ship_controller_script"]
+[ext_resource type="Script" path="res://scenes/system_space/system_space.gd" id="1"]
+[ext_resource type="Script" path="res://packages/gameplay/ship_controller.gd" id="2"]
 
 [sub_resource type="Environment" id="Environment_space"]
 background_mode = 1

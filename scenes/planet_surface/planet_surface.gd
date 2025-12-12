@@ -5,6 +5,7 @@ extends Node3D
 
 signal back_requested()
 signal mission_completed(collected_artifacts: Array)
+signal initialized()
 
 
 ## Planet data
@@ -216,6 +217,10 @@ func _setup_gameplay_systems() -> void:
 		exploration_hud.set_poi_renderer(poi_renderer)
 
 	print("[PlanetSurface] Initialized with %d POIs" % pois.size())
+	initialized.emit()
+
+	if bool(get_meta(&"web_e2e_mission", false)):
+		set_meta(&"web_e2e_initialized", true)
 
 
 ## Find a valid spawn location (for ship landing)

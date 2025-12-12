@@ -1,8 +1,8 @@
 [gd_scene load_steps=4 format=3 uid="uid://planet_surface_scene"]
 
-[ext_resource type="Script" path="res://scenes/planet_surface/planet_surface.gd" id="1" uid="uid://planet_surface_script"]
-[ext_resource type="Script" path="res://packages/render/tile_streamer.gd" id="2" uid="uid://tile_streamer_script"]
-[ext_resource type="Script" path="res://packages/gameplay/character_controller.gd" id="3" uid="uid://character_controller_script"]
+[ext_resource type="Script" path="res://scenes/planet_surface/planet_surface.gd" id="1"]
+[ext_resource type="Script" path="res://packages/render/tile_streamer.gd" id="2"]
+[ext_resource type="Script" path="res://packages/gameplay/character_controller.gd" id="3"]
 
 [sub_resource type="Environment" id="Environment_world"]
 background_mode = 1

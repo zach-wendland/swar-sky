@@ -144,6 +144,9 @@ Run:
 - `npm run install-browsers`
 - `$env:SWAR_WEB_ROOT = \"tools/e2e/.tmp/web\"; npm test`
 
+Notes:
+- Godot Web export requires export templates installed for your engine version (e.g. `4.5.1.stable`).
+
 Test behavior:
 - Loads `index.html?e2e=1`
 - Waits for `window.__SWAR_E2E_DONE__`
