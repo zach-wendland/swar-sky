@@ -146,6 +146,27 @@ Test behavior:
 - Waits for `window.__SWAR_E2E_DONE__`
 - Asserts `per_tile_ms < SWAR_E2E_TILE_MS_MAX` (default 5000)
 
+## 7.3 MCP Servers to Leverage (2025-12-12)
+
+Canonical sources:
+- Reference servers: `modelcontextprotocol/servers`
+- Registry/discovery: `modelcontextprotocol/registry` (and the hosted registry UI)
+
+Recommended MCP servers for this project:
+- **Playwright**: `microsoft/playwright-mcp` (drive E2E on Web export; collect screenshots + timings aligned to `?e2e=1`).
+- **Filesystem**: reference `Filesystem` server (safe, scoped file edits when used in other MCP-capable clients).
+- **Git**: reference `Git` server (review diffs, blame, history; keep perf changes accountable).
+- **Fetch**: reference `Fetch` server (bring in external docs/lore snippets into a controlled pipeline; reduce “random web paste” drift).
+- **Memory**: reference `Memory` server (persist budgets/decisions: tile performance target, seam invariants, seed salts).
+- **Inspector**: `modelcontextprotocol/inspector` (debug custom MCP integrations and tool schemas if/when we add a project-specific MCP server).
+- Optional **Sentry**: `getsentry/sentry-mcp` (post-MVP: web error triage, crash clustering).
+- Optional **Notion**: `makenotion/notion-mcp-server` (sync the spec outward if the team uses Notion).
+- Optional **Linear**: `jerhadf/linear-mcp-server` (turn acceptance criteria into tracked issues, auto-update status from CI runs).
+
+How this ties to the MVP docs:
+- `docs/E2E_MVP_FSD.md` acceptance criteria becomes the source of truth for E2E checks.
+- `docs/E2E_MVP_TSD.md` defines the stable test harness (`?e2e=1` + Playwright) and the perf budget contracts.
+
 ## 8) Performance Budgets & Instrumentation
 
 Primary budget:
@@ -173,4 +194,3 @@ Required reporting:
 - Determinism + seam tests passing
 - Tile streaming “playable enough” for MVP target platform
 - Playwright E2E green against a web export
-

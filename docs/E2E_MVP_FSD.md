@@ -142,9 +142,21 @@ Web targets:
 - Tile seam test passes; determinism tests pass.
 - Playwright web E2E can load a web export and receive a valid `__SWAR_E2E_RESULT__`.
 
+## 13) MCP Tooling Plan (Automation + Feedback Loops)
+
+As of 2025-12-12, the canonical discovery points for MCP servers are:
+- `modelcontextprotocol/servers` (reference servers) and `modelcontextprotocol/registry` (community registry).
+
+We leverage MCP servers to reduce “manual QA” and keep the MVP loop shippable:
+- **Playwright MCP** (recommended: `microsoft/playwright-mcp`) to drive Web export E2E flows and capture screenshots/perf baselines.
+- **Filesystem + Git MCP** (recommended: reference `Filesystem` + `Git`) to keep spec→code changes auditable and to automate “update docs + update tests” loops.
+- **Fetch MCP** (reference `Fetch`) for controlled web retrieval (Godot docs, platform constraints, lore references) without copy/paste drift.
+- **Memory MCP** (reference `Memory`) to persist decision logs (seed policy, perf budgets, “3 truths” invariants) across iterations.
+- Optional (post-MVP): **Sentry MCP** (`getsentry/sentry-mcp`) to triage crashes/JS errors from web builds.
+- Optional (team process): **Notion MCP** (`makenotion/notion-mcp-server`) or **Linear MCP** (e.g., `jerhadf/linear-mcp-server`) to keep external tracking synced with this repo’s specs.
+
 ## 13) Known Risks / Edge Cases (Functional)
 
 - Tile streaming stalls can strand the player (no terrain underfoot) or hitch heavily.
 - POI generation may place POI in water or steep terrain; spawn/POI placement needs validity checks.
 - Web: asset loading/wasm startup timeouts; avoid infinite waiting in E2E.
-
