@@ -4,6 +4,14 @@ class_name SystemGenerator
 extends RefCounted
 
 
+static func _get_seed_stack() -> Node:
+	var loop: MainLoop = Engine.get_main_loop()
+	if loop is SceneTree:
+		var tree := loop as SceneTree
+		return tree.root.get_node_or_null("SeedStack")
+	return null
+
+
 ## Planet type classification
 enum PlanetType {
 	BARREN,      # Airless rock (Mercury-like)
@@ -111,7 +119,21 @@ class SystemData:
 ## Generate a complete star system
 static func generate_system(sector_coords: Vector3i, system_index: int, star_data: GalaxyGenerator.StarData = null) -> SystemData:
 	var system := SystemData.new()
-	var system_seed := SeedStack.get_system_seed(sector_coords, system_index)
+	var system_seed: int
+	if star_data:
+		system_seed = star_data.seed
+	else:
+		var stack := _get_seed_stack()
+		if stack:
+			system_seed = stack.get_system_seed(sector_coords, system_index)
+		else:
+			system_seed = Hash.hash_combine(0, [
+				0x53595354, # "SYST"
+				sector_coords.x,
+				sector_coords.y,
+				sector_coords.z,
+				system_index
+			])
 	system.seed = system_seed
 
 	# Get or regenerate star data
@@ -157,7 +179,10 @@ static func generate_system(sector_coords: Vector3i, system_index: int, star_dat
 static func _generate_orbital_body(system_seed: int, orbit_index: int, orbital_radius: float, star_class: int) -> OrbitalBody:
 	var body := OrbitalBody.new()
 	body.orbit_index = orbit_index
-	body.seed = SeedStack.get_planet_seed_from_system(system_seed, orbit_index)
+	body.seed = Hash.hash_combine(system_seed, [
+		0x504C414E, # "PLAN"
+		orbit_index
+	])
 	body.orbital_radius = orbital_radius
 
 	# Use body's own seed for deterministic properties

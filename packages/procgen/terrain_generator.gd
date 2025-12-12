@@ -22,6 +22,14 @@ const NOISE_PARAMS: Dictionary = {
 	NoiseLayer.EROSION:     { "scale": 0.008, "octaves": 3, "persistence": 0.7, "weight": -0.1 },
 }
 
+const NOISE_LAYER_ORDER: Array[int] = [
+	NoiseLayer.CONTINENTAL,
+	NoiseLayer.MOUNTAIN,
+	NoiseLayer.HILLS,
+	NoiseLayer.DETAIL,
+	NoiseLayer.EROSION,
+]
+
 
 ## Biome classification
 enum Biome {
@@ -63,6 +71,7 @@ class TerrainConfig:
 	var seed: int
 	var planet_type: int
 	var radius_km: float = 6000.0
+	var tile_world_size: float = 1000.0  # World units per tile at LOD 0
 	var sea_level: float = 0.4           # Height threshold for water
 	var mountain_threshold: float = 0.75  # Height for mountains
 	var avg_temperature: float = 15.0     # Celsius
@@ -188,7 +197,12 @@ static func generate_tile(config: TerrainConfig, tile_coords: Vector2i, lod: int
 	var tile := TerrainTileData.new()
 	tile.tile_coords = tile_coords
 	tile.lod = lod
-	tile.seed = SeedStack.get_tile_seed(config.seed, tile_coords, lod)
+	tile.seed = Hash.hash_combine(config.seed, [
+		0x54494C45, # "TILE"
+		tile_coords.x,
+		tile_coords.y,
+		lod
+	])
 	tile.resolution = resolution
 
 	var total_points := resolution * resolution
@@ -197,7 +211,10 @@ static func generate_tile(config: TerrainConfig, tile_coords: Vector2i, lod: int
 	tile.normal_map.resize(total_points)
 
 	# Tile size in world units (depends on LOD)
-	var tile_size := 1000.0 * pow(2.0, lod)  # Base 1km tiles, doubling per LOD
+	var base_tile_size := config.tile_world_size
+	if base_tile_size <= 0.0:
+		base_tile_size = 1000.0
+	var tile_size := base_tile_size * pow(2.0, lod)
 	var step := tile_size / (resolution - 1)
 
 	# World offset for this tile
@@ -233,7 +250,7 @@ static func _sample_terrain_height(config: TerrainConfig, world_pos: Vector2) ->
 	var height := 0.0
 
 	# Sample each noise layer
-	for layer in NOISE_PARAMS:
+	for layer: int in NOISE_LAYER_ORDER:
 		var params: Dictionary = NOISE_PARAMS[layer]
 		var scale: float = params["scale"] * config.continental_scale
 		var octaves: int = params["octaves"]

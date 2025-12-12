@@ -5,6 +5,14 @@ class_name GalaxyGenerator
 extends RefCounted
 
 
+static func _get_seed_stack() -> Node:
+	var loop: MainLoop = Engine.get_main_loop()
+	if loop is SceneTree:
+		var tree := loop as SceneTree
+		return tree.root.get_node_or_null("SeedStack")
+	return null
+
+
 ## Sector size in light years
 const SECTOR_SIZE: float = 1000.0
 
@@ -38,6 +46,16 @@ const STAR_CLASS_DATA: Dictionary = {
 	StarClass.M: { "name": "M", "color": Color(1.0, 0.6, 0.4), "temp": 3000, "luminosity": 0.1, "weight": 50 },
 }
 
+const STAR_CLASS_ORDER: Array[int] = [
+	StarClass.O,
+	StarClass.B,
+	StarClass.A,
+	StarClass.F,
+	StarClass.G,
+	StarClass.K,
+	StarClass.M,
+]
+
 
 ## Generated star data structure
 class StarData:
@@ -61,7 +79,18 @@ class StarData:
 
 ## Generate all stars in a sector
 static func generate_sector(sector_coords: Vector3i) -> Array[StarData]:
-	var sector_seed := SeedStack.get_sector_seed(sector_coords)
+	var sector_seed: int
+	var stack := _get_seed_stack()
+	if stack:
+		sector_seed = stack.get_sector_seed(sector_coords)
+	else:
+		sector_seed = Hash.hash_combine(0, [
+			0x47414C4158, # "GALAX"
+			0x53454354,  # "SECT"
+			sector_coords.x,
+			sector_coords.y,
+			sector_coords.z
+		])
 	var rng := PRNG.new(sector_seed)
 
 	# Determine star count (influenced by galactic position)
@@ -96,17 +125,24 @@ static func generate_sector(sector_coords: Vector3i) -> Array[StarData]:
 	# Build star data for each position
 	var stars: Array[StarData] = []
 	for i in range(positions.size()):
-		var star := _generate_star(sector_coords, i, positions[i], rng)
+		var star := _generate_star(sector_coords, sector_seed, i, positions[i], rng)
 		stars.append(star)
 
 	return stars
 
 
 ## Generate a single star's properties
-static func _generate_star(sector_coords: Vector3i, index: int, local_pos: Vector3, rng: PRNG) -> StarData:
+static func _generate_star(sector_coords: Vector3i, sector_seed: int, index: int, local_pos: Vector3, rng: PRNG) -> StarData:
 	var star := StarData.new()
 	star.index = index
-	star.seed = SeedStack.get_system_seed(sector_coords, index)
+	var stack := _get_seed_stack()
+	if stack:
+		star.seed = stack.get_system_seed(sector_coords, index)
+	else:
+		star.seed = Hash.hash_combine(sector_seed, [
+			0x53595354, # "SYST"
+			index
+		])
 	star.position = local_pos
 	star.galactic_position = Vector3(
 		(sector_coords.x + local_pos.x) * SECTOR_SIZE,
@@ -118,10 +154,10 @@ static func _generate_star(sector_coords: Vector3i, index: int, local_pos: Vecto
 	var star_rng := PRNG.new(star.seed)
 
 	# Pick star class by weight
-	var weights: Array = []
-	for sc in STAR_CLASS_DATA:
+	var weights: Array[float] = []
+	for sc: int in STAR_CLASS_ORDER:
 		weights.append(float(STAR_CLASS_DATA[sc]["weight"]))
-	star.star_class = star_rng.weighted_index(weights)
+	star.star_class = STAR_CLASS_ORDER[star_rng.weighted_index(weights)]
 
 	# Generate name
 	star.star_name = _generate_star_name(star_rng)

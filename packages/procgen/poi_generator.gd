@@ -24,6 +24,15 @@ const POI_WEIGHTS: Dictionary = {
 	POIType.REBEL_CACHE: 10,
 }
 
+const POI_TYPE_ORDER: Array[POIType] = [
+	POIType.JEDI_RUINS,
+	POIType.IMPERIAL_OUTPOST,
+	POIType.CRASHED_SHIP,
+	POIType.CAVE_SYSTEM,
+	POIType.ANCIENT_MONUMENT,
+	POIType.REBEL_CACHE,
+]
+
 ## POI type data
 const POI_TYPE_DATA: Dictionary = {
 	POIType.JEDI_RUINS: {
@@ -82,6 +91,9 @@ const POI_TYPE_DATA: Dictionary = {
 	},
 }
 
+const POI_PLANET_RNG_SALT: int = 77777
+const POI_SEED_SALT: int = 88888
+
 
 ## POI instance data
 class POIData extends RefCounted:
@@ -109,7 +121,7 @@ class POIData extends RefCounted:
 ## Generate POIs for a planet
 static func generate_planet_pois(planet_seed: int, planet_type: int, terrain_config: TerrainGenerator.TerrainConfig) -> Array[POIData]:
 	var pois: Array[POIData] = []
-	var rng := PRNG.new(planet_seed + 77777)  # POI-specific salt
+	var rng := PRNG.new(planet_seed + POI_PLANET_RNG_SALT)
 
 	# Determine number of POIs based on planet type
 	var base_count := _get_poi_count_for_planet(planet_type, rng)
@@ -142,11 +154,14 @@ static func _get_poi_count_for_planet(planet_type: int, rng: PRNG) -> int:
 ## Generate a single POI
 static func _generate_single_poi(planet_seed: int, index: int, terrain_config: TerrainGenerator.TerrainConfig, rng: PRNG) -> POIData:
 	var poi := POIData.new()
-	poi.seed = Hash.hash_combine(planet_seed, [88888, index])
+	poi.seed = Hash.hash_combine(planet_seed, [POI_SEED_SALT, index])
 
 	# Choose POI type based on weights
 	var poi_rng := PRNG.new(poi.seed)
-	poi.poi_type = poi_rng.weighted_index(POI_WEIGHTS.values()) as POIType
+	var weight_list: Array[float] = []
+	for t: POIType in POI_TYPE_ORDER:
+		weight_list.append(float(POI_WEIGHTS[t]))
+	poi.poi_type = POI_TYPE_ORDER[poi_rng.weighted_index(weight_list)]
 
 	var type_data := poi.get_type_data()
 

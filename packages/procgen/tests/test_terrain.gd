@@ -90,8 +90,8 @@ func test_biome_distribution() -> bool:
 		return false
 
 	# Check water exists for temperate planet
-	var water_count := biome_counts.get(TerrainGenerator.Biome.OCEAN_DEEP, 0) + \
-	                   biome_counts.get(TerrainGenerator.Biome.OCEAN_SHALLOW, 0)
+	var water_count: int = int(biome_counts.get(TerrainGenerator.Biome.OCEAN_DEEP, 0)) + \
+		int(biome_counts.get(TerrainGenerator.Biome.OCEAN_SHALLOW, 0))
 	if water_count == 0:
 		print("  WARN: No water found in temperate planet sample")
 

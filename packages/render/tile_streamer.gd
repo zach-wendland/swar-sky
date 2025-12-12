@@ -49,6 +49,8 @@ func initialize(p_seed: int, p_type: int, detail: PlanetGenerator.PlanetDetail =
 	planet_seed = p_seed
 	planet_type = p_type
 	terrain_config = TerrainGenerator.create_config(p_seed, p_type, detail)
+	if terrain_config:
+		terrain_config.tile_world_size = tile_size
 
 	# Clear any existing tiles
 	clear_all_tiles()

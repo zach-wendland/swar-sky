@@ -270,6 +270,9 @@ func test_seed_chain_uniqueness() -> bool:
 
 						if seen_planets.has(planet_seed):
 							print("  FAIL: Planet seed collision")
+							print("        seed: ", planet_seed)
+							print("        first: ", seen_planets[planet_seed])
+							print("        second: ", [sector, sys_idx, planet_idx])
 							return false
 						seen_planets[planet_seed] = [sector, sys_idx, planet_idx]
 
@@ -310,6 +313,8 @@ func test_cross_layer_independence() -> bool:
 	var alt_system := stack.get_system_seed(sector, 1)  # system+1
 	if alt_system == system_seed:
 		print("  FAIL: Adjacent systems have same seed")
+		print("        system_seed: ", system_seed)
+		print("        alt_system:  ", alt_system)
 		return false
 
 	print("  PASS: Layers are independent, adjacent values differ")

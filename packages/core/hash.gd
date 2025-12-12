@@ -11,6 +11,7 @@ const PRIME2: int = 0x85EBCA77
 const PRIME3: int = 0xC2B2AE3D
 const PRIME4: int = 0x27D4EB2F
 const PRIME5: int = 0x165667B1
+const MASK_63: int = 0x7FFFFFFFFFFFFFFF
 
 
 ## Hash a single 64-bit integer seed with coordinates
@@ -80,20 +81,23 @@ static func to_int_range(hash_value: int, min_val: int, max_val: int) -> int:
 
 ## Internal: Mix a value into the hash state
 static func _mix(h: int, value: int) -> int:
-	h ^= value * PRIME2
-	h = ((h << 31) | (h >> 33))  # Rotate left 31
-	h *= PRIME1
+	h &= MASK_63
+	var v := value & MASK_63
+	h ^= (v * PRIME2) & MASK_63
+	h = ((h << 31) | (h >> 33)) & MASK_63  # Rotate left 31 (63-bit domain)
+	h = (h * PRIME1) & MASK_63
 	return h
 
 
 ## Internal: Final avalanche mixing
 static func _finalize(h: int) -> int:
+	h &= MASK_63
 	h ^= h >> 33
-	h *= PRIME2
+	h = (h * PRIME2) & MASK_63
 	h ^= h >> 29
-	h *= PRIME3
+	h = (h * PRIME3) & MASK_63
 	h ^= h >> 32
-	return h
+	return h & MASK_63
 
 
 ## Internal: Convert float to int bits (IEEE 754)
