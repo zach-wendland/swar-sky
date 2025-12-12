@@ -173,6 +173,9 @@ func test_performance() -> bool:
 
 	var config := TerrainGenerator.create_config(77777, SystemGenerator.PlanetType.TEMPERATE)
 
+	# Warm-up (JIT/caches/etc.)
+	var _warmup_tile := TerrainGenerator.generate_tile(config, Vector2i(0, 0), 0, 33)
+
 	# Time tile generation
 	var start := Time.get_ticks_msec()
 	var tiles_to_generate := 10
@@ -186,6 +189,11 @@ func test_performance() -> bool:
 
 	print("  Generated ", tiles_to_generate, " tiles (", resolution, "x", resolution, ") in ", elapsed, "ms")
 	print("  Average: ", "%.2f" % per_tile, "ms per tile")
+
+	# Profiling breakdown (not included in timing)
+	var profiled_tile := TerrainGenerator.generate_tile(config, Vector2i(999, 0), 0, resolution, true)
+	if profiled_tile.profile != null:
+		profiled_tile.profile.print_report(resolution)
 
 	# Budget check: tiles should generate in under 50ms each for smooth streaming
 	if per_tile > 50:

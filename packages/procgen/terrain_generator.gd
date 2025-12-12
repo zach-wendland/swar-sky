@@ -30,6 +30,49 @@ const NOISE_LAYER_ORDER: Array[int] = [
 	NoiseLayer.EROSION,
 ]
 
+const NOISE_LAYER_COUNT: int = NoiseLayer.EROSION + 1
+
+class TerrainProfile:
+	var total_usec: int = 0
+	var height_usec: int = 0
+	var biome_usec: int = 0
+	var normals_usec: int = 0
+
+	var sample_usec: int = 0
+	var fbm_usec: int = 0
+	var simplex_usec: int = 0
+	var hash_calls: int = 0
+
+	var layer_usec: PackedInt64Array = PackedInt64Array()
+	var layer_samples: PackedInt32Array = PackedInt32Array()
+
+	func _init() -> void:
+		layer_usec.resize(NOISE_LAYER_COUNT)
+		layer_samples.resize(NOISE_LAYER_COUNT)
+
+	static func _layer_name(layer: int) -> String:
+		match layer:
+			NoiseLayer.CONTINENTAL:
+				return "continental"
+			NoiseLayer.MOUNTAIN:
+				return "mountain"
+			NoiseLayer.HILLS:
+				return "hills"
+			NoiseLayer.DETAIL:
+				return "detail"
+			NoiseLayer.EROSION:
+				return "erosion"
+		return "unknown"
+
+	func print_report(resolution: int) -> void:
+		print("  Profile (", resolution, "x", resolution, "): total=", total_usec / 1000.0, "ms",
+			" heights=", height_usec / 1000.0, "ms",
+			" biomes=", biome_usec / 1000.0, "ms",
+			" normals=", normals_usec / 1000.0, "ms")
+		print("    noise: sample=", sample_usec / 1000.0, "ms fbm=", fbm_usec / 1000.0, "ms simplex=", simplex_usec / 1000.0, "ms hash_calls=", hash_calls)
+		for layer in NOISE_LAYER_ORDER:
+			print("    layer ", _layer_name(layer), ": ", layer_usec[layer] / 1000.0, "ms (samples=", layer_samples[layer], ")")
+
 
 ## Biome classification
 enum Biome {
@@ -94,6 +137,7 @@ class TerrainTileData:
 	var biome_map: PackedInt32Array        # Grid of Biome enum values
 	var normal_map: PackedVector3Array     # Surface normals
 	var resolution: int                    # Grid size (e.g., 33 for 32 quads)
+	var profile: TerrainProfile = null
 
 	func get_height_at(local_x: int, local_y: int) -> float:
 		var idx := local_y * resolution + local_x
@@ -193,7 +237,7 @@ static func create_config(planet_seed: int, planet_type: int, detail: PlanetGene
 
 
 ## Generate a terrain tile
-static func generate_tile(config: TerrainConfig, tile_coords: Vector2i, lod: int = 0, resolution: int = 33) -> TerrainTileData:
+static func generate_tile(config: TerrainConfig, tile_coords: Vector2i, lod: int = 0, resolution: int = 33, enable_profile: bool = false) -> TerrainTileData:
 	var tile := TerrainTileData.new()
 	tile.tile_coords = tile_coords
 	tile.lod = lod
@@ -217,37 +261,68 @@ static func generate_tile(config: TerrainConfig, tile_coords: Vector2i, lod: int
 	var tile_size := base_tile_size * pow(2.0, lod)
 	var step := tile_size / (resolution - 1)
 
-	# World offset for this tile
-	var world_offset := Vector2(tile_coords.x * tile_size, tile_coords.y * tile_size)
+	var profile: TerrainProfile = null
+	var total_start_usec := 0
+	if enable_profile:
+		profile = TerrainProfile.new()
+		total_start_usec = Time.get_ticks_usec()
+
+	# World offset for this tile (floats to avoid Vector2 churn)
+	var world_offset_x := float(tile_coords.x) * tile_size
+	var world_offset_y := float(tile_coords.y) * tile_size
 
 	# Generate heightmap
 	for y in range(resolution):
+		var world_y := world_offset_y + float(y) * step
 		for x in range(resolution):
 			var idx := y * resolution + x
-			var world_pos := world_offset + Vector2(x * step, y * step)
+			var world_x := world_offset_x + float(x) * step
 
-			# Generate height using layered noise
-			var height := _sample_terrain_height(config, world_pos)
+			var height_start_usec := 0
+			if profile != null:
+				height_start_usec = Time.get_ticks_usec()
+			var height := _sample_terrain_height_xy(config, world_x, world_y, profile)
+			if profile != null:
+				profile.height_usec += Time.get_ticks_usec() - height_start_usec
 			tile.heightmap[idx] = height
 
 			# Calculate latitude for biome (simplified: use y position relative to planet)
-			var latitude := _world_to_latitude(world_pos, config.radius_km)
+			var latitude := _world_to_latitude_y(world_y, config.radius_km)
 
 			# Determine biome
-			tile.biome_map[idx] = _determine_biome(config, height, latitude, world_pos)
+			var biome_start_usec := 0
+			if profile != null:
+				biome_start_usec = Time.get_ticks_usec()
+			tile.biome_map[idx] = _determine_biome_xy(config, height, latitude, world_x, world_y, profile)
+			if profile != null:
+				profile.biome_usec += Time.get_ticks_usec() - biome_start_usec
 
 	# Generate normals (after all heights are computed)
+	var normals_start_usec := 0
+	if profile != null:
+		normals_start_usec = Time.get_ticks_usec()
 	for y in range(resolution):
 		for x in range(resolution):
 			var idx := y * resolution + x
 			tile.normal_map[idx] = _calculate_normal(tile, x, y, step)
+	if profile != null:
+		profile.normals_usec = Time.get_ticks_usec() - normals_start_usec
+		profile.total_usec = Time.get_ticks_usec() - total_start_usec
+		tile.profile = profile
 
 	return tile
 
 
 ## Sample terrain height at a world position
 static func _sample_terrain_height(config: TerrainConfig, world_pos: Vector2) -> float:
+	return _sample_terrain_height_xy(config, world_pos.x, world_pos.y, null)
+
+static func _sample_terrain_height_xy(config: TerrainConfig, world_x: float, world_y: float, profile: TerrainProfile) -> float:
 	var height := 0.0
+
+	var start_usec := 0
+	if profile != null:
+		start_usec = Time.get_ticks_usec()
 
 	# Sample each noise layer
 	for layer: int in NOISE_LAYER_ORDER:
@@ -264,7 +339,13 @@ static func _sample_terrain_height(config: TerrainConfig, world_pos: Vector2) ->
 		if layer == NoiseLayer.EROSION:
 			weight *= config.erosion_strength
 
-		var layer_value := _fbm_noise(config.seed + layer, world_pos, scale, octaves, persistence)
+		var layer_start_usec := 0
+		if profile != null:
+			layer_start_usec = Time.get_ticks_usec()
+		var layer_value := _fbm_noise_xy(config.seed + layer, world_x, world_y, scale, octaves, persistence, profile)
+		if profile != null:
+			profile.layer_usec[layer] += Time.get_ticks_usec() - layer_start_usec
+			profile.layer_samples[layer] += 1
 		height += layer_value * weight
 
 	# Normalize to 0-1 range
@@ -274,63 +355,92 @@ static func _sample_terrain_height(config: TerrainConfig, world_pos: Vector2) ->
 	# Apply height multiplier
 	height = pow(height, 1.0 / config.height_multiplier) if config.height_multiplier != 1.0 else height
 
+	if profile != null:
+		profile.sample_usec += Time.get_ticks_usec() - start_usec
+
 	return height
 
 
 ## Fractal Brownian Motion noise
 static func _fbm_noise(seed: int, pos: Vector2, scale: float, octaves: int, persistence: float) -> float:
+	return _fbm_noise_xy(seed, pos.x, pos.y, scale, octaves, persistence, null)
+
+static func _fbm_noise_xy(seed: int, x: float, y: float, scale: float, octaves: int, persistence: float, profile: TerrainProfile) -> float:
 	var value := 0.0
 	var amplitude := 1.0
 	var frequency := scale
 	var max_value := 0.0
 
+	var start_usec := 0
+	if profile != null:
+		start_usec = Time.get_ticks_usec()
+
 	for i in range(octaves):
-		value += _simplex_2d(seed + i * 1000, pos * frequency) * amplitude
+		var s := _simplex_2d_xy(seed + i * 1000, x * frequency, y * frequency, profile)
+		value += s * amplitude
 		max_value += amplitude
 		amplitude *= persistence
 		frequency *= 2.0
+
+	if profile != null:
+		profile.fbm_usec += Time.get_ticks_usec() - start_usec
 
 	return value / max_value
 
 
 ## 2D simplex-like noise (deterministic)
 static func _simplex_2d(seed: int, pos: Vector2) -> float:
+	return _simplex_2d_xy(seed, pos.x, pos.y, null)
+
+static func _simplex_2d_xy(seed: int, x: float, y: float, profile: TerrainProfile) -> float:
+	var start_usec := 0
+	if profile != null:
+		start_usec = Time.get_ticks_usec()
+
 	# Grid cell coordinates
-	var i := int(floor(pos.x))
-	var j := int(floor(pos.y))
+	var i := int(floor(x))
+	var j := int(floor(y))
 
 	# Local position within cell
-	var fx := pos.x - i
-	var fy := pos.y - j
+	var fx := x - i
+	var fy := y - j
 
 	# Smoothstep for interpolation
 	var u := fx * fx * (3.0 - 2.0 * fx)
 	var v := fy * fy * (3.0 - 2.0 * fy)
 
 	# Hash corners
-	var n00 := _hash_to_float(seed, i, j)
-	var n10 := _hash_to_float(seed, i + 1, j)
-	var n01 := _hash_to_float(seed, i, j + 1)
-	var n11 := _hash_to_float(seed, i + 1, j + 1)
+	var n00 := _hash_to_float(seed, i, j, profile)
+	var n10 := _hash_to_float(seed, i + 1, j, profile)
+	var n01 := _hash_to_float(seed, i, j + 1, profile)
+	var n11 := _hash_to_float(seed, i + 1, j + 1, profile)
 
 	# Bilinear interpolation
 	var nx0 := lerpf(n00, n10, u)
 	var nx1 := lerpf(n01, n11, u)
-	return lerpf(nx0, nx1, v)
+	var out := lerpf(nx0, nx1, v)
+	if profile != null:
+		profile.simplex_usec += Time.get_ticks_usec() - start_usec
+	return out
 
 
 ## Hash grid position to float in [-1, 1]
-static func _hash_to_float(seed: int, x: int, y: int) -> float:
-	var h := Hash.hash_coords(seed, x, y)
+static func _hash_to_float(seed: int, x: int, y: int, profile: TerrainProfile) -> float:
+	if profile != null:
+		profile.hash_calls += 1
+	var h := Hash.hash_coords2(seed, x, y)
 	return Hash.to_float(h) * 2.0 - 1.0
 
 
 ## Convert world position to approximate latitude (-90 to 90)
 static func _world_to_latitude(world_pos: Vector2, radius_km: float) -> float:
+	return _world_to_latitude_y(world_pos.y, radius_km)
+
+static func _world_to_latitude_y(world_y: float, radius_km: float) -> float:
 	# Simplified: assume world_pos.y maps to latitude
 	# In a real sphere, this would be based on UV mapping
 	var circumference := radius_km * 2.0 * PI
-	var latitude := (world_pos.y / circumference) * 360.0
+	var latitude := (world_y / circumference) * 360.0
 	latitude = fmod(latitude, 180.0)
 	if latitude > 90.0:
 		latitude = 180.0 - latitude
@@ -341,6 +451,9 @@ static func _world_to_latitude(world_pos: Vector2, radius_km: float) -> float:
 
 ## Determine biome based on height, latitude, and local conditions
 static func _determine_biome(config: TerrainConfig, height: float, latitude: float, world_pos: Vector2) -> int:
+	return _determine_biome_xy(config, height, latitude, world_pos.x, world_pos.y, null)
+
+static func _determine_biome_xy(config: TerrainConfig, height: float, latitude: float, world_x: float, world_y: float, profile: TerrainProfile) -> int:
 	var abs_lat: float = abs(latitude)
 
 	# Temperature decreases with latitude and altitude
@@ -349,7 +462,7 @@ static func _determine_biome(config: TerrainConfig, height: float, latitude: flo
 	temp -= maxf(0.0, height - config.sea_level) * 50.0  # Cooler at altitude
 
 	# Moisture (simplified: use noise)
-	var moisture := _simplex_2d(config.seed + 99999, world_pos * 0.003) * 0.5 + 0.5
+	var moisture := _simplex_2d_xy(config.seed + 99999, world_x * 0.003, world_y * 0.003, profile) * 0.5 + 0.5
 
 	# Water bodies
 	if height < config.sea_level:
@@ -423,11 +536,11 @@ static func _calculate_normal(tile: TerrainTileData, x: int, y: int, step: float
 
 ## Get height at arbitrary world position (interpolated)
 static func get_height_at_world(config: TerrainConfig, world_pos: Vector2) -> float:
-	return _sample_terrain_height(config, world_pos)
+	return _sample_terrain_height_xy(config, world_pos.x, world_pos.y, null)
 
 
 ## Get biome at arbitrary world position
 static func get_biome_at_world(config: TerrainConfig, world_pos: Vector2) -> int:
-	var height := _sample_terrain_height(config, world_pos)
-	var latitude := _world_to_latitude(world_pos, config.radius_km)
-	return _determine_biome(config, height, latitude, world_pos)
+	var height := _sample_terrain_height_xy(config, world_pos.x, world_pos.y, null)
+	var latitude := _world_to_latitude_y(world_pos.y, config.radius_km)
+	return _determine_biome_xy(config, height, latitude, world_pos.x, world_pos.y, null)

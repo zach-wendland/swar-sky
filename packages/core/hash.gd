@@ -24,6 +24,14 @@ static func hash_coords(seed: int, x: int, y: int = 0, z: int = 0) -> int:
 	return _finalize(h)
 
 
+## Hash seed with 2D coordinates (hot path helper)
+static func hash_coords2(seed: int, x: int, y: int) -> int:
+	var h: int = seed
+	h = _mix(h, x)
+	h = _mix(h, y)
+	return _finalize(h)
+
+
 ## Hash seed with an archetype/type ID
 static func hash_type(seed: int, type_id: int) -> int:
 	var h: int = seed
