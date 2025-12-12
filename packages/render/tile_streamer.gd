@@ -45,7 +45,7 @@ func _process(delta: float) -> void:
 
 
 ## Initialize with planet data
-func initialize(p_seed: int, p_type: int, detail: PlanetGenerator.PlanetDetail = null) -> void:
+func initialize(p_seed: int, p_type: int, detail: PlanetGenerator.PlanetDetail = null, immediate_load: bool = true) -> void:
 	planet_seed = p_seed
 	planet_type = p_type
 	terrain_config = TerrainGenerator.create_config(p_seed, p_type, detail)
@@ -60,7 +60,8 @@ func initialize(p_seed: int, p_type: int, detail: PlanetGenerator.PlanetDetail =
 
 	# Force immediate tile load around origin
 	_player_tile = Vector2i.ZERO
-	_update_tiles_immediate()
+	if immediate_load:
+		_update_tiles_immediate()
 
 
 ## Update player position (call from character controller)

@@ -120,7 +120,14 @@ func initialize(p_seed: int, p_type: int, p_name: String, detail: PlanetGenerato
 
 	# Initialize terrain
 	if tile_streamer:
-		tile_streamer.initialize(p_seed, p_type, planet_detail)
+		var e2e_mission: bool = bool(get_meta(&"web_e2e_mission", false))
+		if e2e_mission:
+			tile_streamer.view_distance = int(get_meta(&"web_e2e_view_distance", 0))
+			tile_streamer.tile_resolution = int(get_meta(&"web_e2e_tile_resolution", 17))
+			tile_streamer.update_interval = float(get_meta(&"web_e2e_update_interval", 9999.0))
+
+		var immediate_load: bool = not bool(get_meta(&"web_e2e_no_immediate_tiles", false))
+		tile_streamer.initialize(p_seed, p_type, planet_detail, immediate_load)
 
 	# Set environment
 	_setup_environment()

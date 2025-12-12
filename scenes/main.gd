@@ -59,12 +59,18 @@ func _try_run_web_e2e() -> bool:
 
 	var enabled: bool = false
 	var enabled_raw: Variant = JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('e2e')")
+	var mode: String = ""
 	if enabled_raw != null:
 		var s := str(enabled_raw)
 		enabled = s != "" and s != "0" and s.to_lower() != "false"
+		mode = s.to_lower()
 
 	if not enabled:
 		return false
+
+	if mode == "mission":
+		call_deferred("_run_web_e2e_mission")
+		return true
 
 	var config := TerrainGenerator.create_config(77777, SystemGenerator.PlanetType.TEMPERATE)
 	var resolution := 33
@@ -98,6 +104,127 @@ func _try_run_web_e2e() -> bool:
 	JavaScriptBridge.eval("window.__SWAR_E2E_DONE__ = true;")
 
 	return true
+
+
+func _web_e2e_publish_result(result: Dictionary) -> void:
+	var json: String = JSON.stringify(result)
+	print("[E2E] RESULT ", json)
+
+	var json_literal: String = JSON.stringify(json) # quoted JS string literal
+	JavaScriptBridge.eval("window.__SWAR_E2E_RESULT__ = JSON.parse(" + json_literal + ");")
+	JavaScriptBridge.eval("window.__SWAR_E2E_DONE__ = true;")
+
+
+func _run_web_e2e_mission() -> void:
+	var start_usec: int = Time.get_ticks_usec()
+
+	SeedStack.initialize_from_string("swar-sky-e2e-mission-001")
+
+	var planet_seed: int = 77777
+	var planet_type: int = SystemGenerator.PlanetType.TEMPERATE
+	var planet_name: String = "E2E Planet"
+
+	planet_surface = PlanetSurfaceScene.instantiate()
+	planet_surface.set_meta(&"web_e2e_mission", true)
+	planet_surface.set_meta(&"web_e2e_no_immediate_tiles", true)
+	planet_surface.set_meta(&"web_e2e_view_distance", 0)
+	planet_surface.set_meta(&"web_e2e_tile_resolution", 17)
+	planet_surface.set_meta(&"web_e2e_update_interval", 9999.0)
+	add_child(planet_surface)
+
+	var done: bool = false
+	var collected: Array = []
+
+	planet_surface.mission_completed.connect(func(artifacts: Array) -> void:
+		done = true
+		collected = artifacts
+	)
+
+	planet_surface.initialize(planet_seed, planet_type, planet_name, null)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	var error: String = ""
+	var step_discovered: bool = false
+	var step_collected: bool = false
+	var step_boarded: bool = false
+	var poi_name: String = ""
+
+	if planet_surface.pois == null or planet_surface.pois.is_empty():
+		error = "no_pois_generated"
+	elif planet_surface.poi_renderer == null:
+		error = "poi_renderer_missing"
+	elif planet_surface.objective_system == null:
+		error = "objective_system_missing"
+	elif planet_surface.ship_landing == null:
+		error = "ship_landing_missing"
+	elif planet_surface.character == null:
+		error = "character_missing"
+
+	if error == "":
+		var poi = planet_surface.pois[0]
+		poi_name = str(poi.get_type_data().get("name", "Unknown"))
+
+		var poi_pos: Vector3 = poi.position
+		planet_surface.character.set_character_position(poi_pos + Vector3(0, 0.5, 0))
+
+		planet_surface.poi_renderer.update_player_position(poi_pos)
+		planet_surface.poi_renderer._check_poi_proximity()
+		step_discovered = bool(poi.discovered)
+		if not step_discovered:
+			error = "poi_not_discovered"
+
+	if error == "":
+		var poi = planet_surface.pois[0]
+		var artifact_pos: Vector3 = poi.get_world_artifact_position()
+		planet_surface.character.set_character_position(artifact_pos)
+
+		planet_surface.poi_renderer.update_player_position(artifact_pos)
+		planet_surface.poi_renderer._check_poi_proximity()
+		var collected_ok: bool = bool(planet_surface.poi_renderer.try_collect_artifact())
+		step_collected = collected_ok and bool(poi.artifact_collected)
+		if not step_collected:
+			error = "artifact_not_collected"
+
+	if error == "":
+		var ship_pos: Vector3 = planet_surface.ship_spawn_position
+		planet_surface.character.set_character_position(ship_pos + Vector3(0, 0.5, 0))
+		planet_surface.ship_landing.update_player_position(ship_pos)
+		planet_surface.objective_system.update_player_position(ship_pos)
+		await get_tree().process_frame
+
+		if not bool(planet_surface.ship_landing.get_can_board()):
+			error = "cannot_board_ship"
+		elif not bool(planet_surface.objective_system.can_leave_planet()):
+			error = "objective_system_refused_leave"
+		else:
+			step_boarded = bool(planet_surface.ship_landing.try_board())
+			if not step_boarded:
+				error = "board_request_failed"
+
+	if error == "":
+		var timeout_ms: int = 30_000
+		var start_ms: int = Time.get_ticks_msec()
+		while not done and (Time.get_ticks_msec() - start_ms) < timeout_ms:
+			await get_tree().process_frame
+
+		if not done:
+			error = "mission_completed_timeout"
+
+	var elapsed_ms: float = float(Time.get_ticks_usec() - start_usec) / 1000.0
+	_web_e2e_publish_result({
+		"mode": "mission",
+		"success": error == "",
+		"error": error,
+		"elapsed_ms": elapsed_ms,
+		"poi_name": poi_name,
+		"steps": {
+			"discovered": step_discovered,
+			"collected": step_collected,
+			"boarded": step_boarded,
+		},
+		"artifacts": collected,
+	})
 
 
 func _create_view_indicator() -> void:
