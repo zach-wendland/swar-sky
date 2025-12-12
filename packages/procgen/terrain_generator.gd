@@ -271,29 +271,39 @@ static func generate_tile(config: TerrainConfig, tile_coords: Vector2i, lod: int
 	var world_offset_x := float(tile_coords.x) * tile_size
 	var world_offset_y := float(tile_coords.y) * tile_size
 
-	# Generate heightmap
+	var height_start_usec := 0
+	if profile != null:
+		height_start_usec = Time.get_ticks_usec()
+
+	# Build heightmap using cached per-octave sampling (slashing hash calls when reuse exists)
+	_fill_tile_heightmap(config, world_offset_x, world_offset_y, step, resolution, tile.heightmap, profile)
+
+	if profile != null:
+		profile.height_usec = Time.get_ticks_usec() - height_start_usec
+
+	# Moisture field for biomes (cached, one octave)
+	var moisture_start_usec := 0
+	if profile != null:
+		moisture_start_usec = Time.get_ticks_usec()
+	var moisture := PackedFloat32Array()
+	moisture.resize(total_points)
+	_accumulate_simplex_tile_into(config.seed + 99999, world_offset_x, world_offset_y, step, resolution, 0.003, 1.0, moisture, profile)
+	if profile != null:
+		profile.biome_usec += Time.get_ticks_usec() - moisture_start_usec
+
+	# Generate biome map
 	for y in range(resolution):
 		var world_y := world_offset_y + float(y) * step
 		for x in range(resolution):
 			var idx := y * resolution + x
-			var world_x := world_offset_x + float(x) * step
-
-			var height_start_usec := 0
-			if profile != null:
-				height_start_usec = Time.get_ticks_usec()
-			var height := _sample_terrain_height_xy(config, world_x, world_y, profile)
-			if profile != null:
-				profile.height_usec += Time.get_ticks_usec() - height_start_usec
-			tile.heightmap[idx] = height
 
 			# Calculate latitude for biome (simplified: use y position relative to planet)
 			var latitude := _world_to_latitude_y(world_y, config.radius_km)
 
-			# Determine biome
 			var biome_start_usec := 0
 			if profile != null:
 				biome_start_usec = Time.get_ticks_usec()
-			tile.biome_map[idx] = _determine_biome_xy(config, height, latitude, world_x, world_y, profile)
+			tile.biome_map[idx] = _determine_biome_from_moisture(config, tile.heightmap[idx], latitude, moisture[idx] * 0.5 + 0.5)
 			if profile != null:
 				profile.biome_usec += Time.get_ticks_usec() - biome_start_usec
 
@@ -311,6 +321,185 @@ static func generate_tile(config: TerrainConfig, tile_coords: Vector2i, lod: int
 		tile.profile = profile
 
 	return tile
+
+
+static func _fill_tile_heightmap(
+	config: TerrainConfig,
+	world_offset_x: float,
+	world_offset_y: float,
+	step: float,
+	resolution: int,
+	out_heightmap: PackedFloat32Array,
+	profile: TerrainProfile
+) -> void:
+	var total_points := resolution * resolution
+	var accum := PackedFloat32Array()
+	accum.resize(total_points)
+
+	for layer: int in NOISE_LAYER_ORDER:
+		var layer_start_usec := 0
+		if profile != null:
+			layer_start_usec = Time.get_ticks_usec()
+
+		var params: Dictionary = NOISE_PARAMS[layer]
+		var scale: float = params["scale"] * config.continental_scale
+		var octaves: int = params["octaves"]
+		var persistence: float = params["persistence"]
+		var weight: float = params["weight"]
+
+		# Apply roughness modifier
+		if layer in [NoiseLayer.HILLS, NoiseLayer.DETAIL]:
+			weight *= config.terrain_roughness * 2.0
+
+		if layer == NoiseLayer.EROSION:
+			weight *= config.erosion_strength
+
+		var layer_seed := config.seed + layer
+		var layer_accum := PackedFloat32Array()
+		layer_accum.resize(total_points)
+
+		var amplitude := 1.0
+		var frequency := scale
+		var max_value := 0.0
+
+		var fbm_start_usec := 0
+		if profile != null:
+			fbm_start_usec = Time.get_ticks_usec()
+
+		for octave in range(octaves):
+			_accumulate_simplex_tile_into(layer_seed + octave * 1000, world_offset_x, world_offset_y, step, resolution, frequency, amplitude, layer_accum, profile)
+			max_value += amplitude
+			amplitude *= persistence
+			frequency *= 2.0
+
+		if profile != null:
+			profile.fbm_usec += Time.get_ticks_usec() - fbm_start_usec
+
+		var inv_max := 1.0 / max_value
+		for idx in range(total_points):
+			accum[idx] += (layer_accum[idx] * inv_max) * weight
+
+		if profile != null:
+			profile.layer_usec[layer] += Time.get_ticks_usec() - layer_start_usec
+			profile.layer_samples[layer] += total_points
+
+	# Normalize to 0-1 range and apply multiplier
+	for idx in range(total_points):
+		var h := accum[idx]
+		h = (h + 1.0) * 0.5
+		h = clampf(h, 0.0, 1.0)
+		h = pow(h, 1.0 / config.height_multiplier) if config.height_multiplier != 1.0 else h
+		out_heightmap[idx] = h
+
+
+static func _accumulate_simplex_tile_into(
+	seed: int,
+	world_offset_x: float,
+	world_offset_y: float,
+	step: float,
+	resolution: int,
+	frequency: float,
+	amplitude: float,
+	dest: PackedFloat32Array,
+	profile: TerrainProfile
+) -> void:
+	var start_usec := 0
+	if profile != null:
+		start_usec = Time.get_ticks_usec()
+
+	var total_points := resolution * resolution
+
+	var i_x := PackedInt64Array()
+	i_x.resize(resolution)
+	var u_x := PackedFloat32Array()
+	u_x.resize(resolution)
+
+	var j_y := PackedInt64Array()
+	j_y.resize(resolution)
+	var v_y := PackedFloat32Array()
+	v_y.resize(resolution)
+
+	var i_min := 0
+	var i_max := 0
+	var j_min := 0
+	var j_max := 0
+
+	for x in range(resolution):
+		var sx := (world_offset_x + float(x) * step) * frequency
+		var ix := int(floor(sx))
+		var fx := sx - float(ix)
+		var u := fx * fx * (3.0 - 2.0 * fx)
+		i_x[x] = ix
+		u_x[x] = u
+		if x == 0:
+			i_min = ix
+			i_max = ix
+		else:
+			i_min = mini(i_min, ix)
+			i_max = maxi(i_max, ix)
+
+	for y in range(resolution):
+		var sy := (world_offset_y + float(y) * step) * frequency
+		var jy := int(floor(sy))
+		var fy := sy - float(jy)
+		var v := fy * fy * (3.0 - 2.0 * fy)
+		j_y[y] = jy
+		v_y[y] = v
+		if y == 0:
+			j_min = jy
+			j_max = jy
+		else:
+			j_min = mini(j_min, jy)
+			j_max = maxi(j_max, jy)
+
+	# Decide whether a dense lattice cache is worth it.
+	var lattice_w := (i_max - i_min) + 2
+	var lattice_h := (j_max - j_min) + 2
+	var lattice_points := lattice_w * lattice_h
+	var direct_hashes := total_points * 4
+
+	if lattice_points > 0 and lattice_points <= direct_hashes:
+		var lattice := PackedFloat32Array()
+		lattice.resize(lattice_points)
+		var write_idx := 0
+		for gy in range(j_min, j_max + 2):
+			for gx in range(i_min, i_max + 2):
+				lattice[write_idx] = _hash_to_float(seed, gx, gy, profile)
+				write_idx += 1
+
+		for y in range(resolution):
+			var jy := int(j_y[y]) - j_min
+			var v := v_y[y]
+			var row0 := jy * lattice_w
+			var row1 := (jy + 1) * lattice_w
+			for x in range(resolution):
+				var ix := int(i_x[x]) - i_min
+				var u := u_x[x]
+				var n00 := lattice[row0 + ix]
+				var n10 := lattice[row0 + ix + 1]
+				var n01 := lattice[row1 + ix]
+				var n11 := lattice[row1 + ix + 1]
+				var nx0 := lerpf(n00, n10, u)
+				var nx1 := lerpf(n01, n11, u)
+				dest[y * resolution + x] += lerpf(nx0, nx1, v) * amplitude
+	else:
+		# Sparse or high-frequency: precompute floors/interps but hash directly.
+		for y in range(resolution):
+			var jy := int(j_y[y])
+			var v := v_y[y]
+			for x in range(resolution):
+				var ix := int(i_x[x])
+				var u := u_x[x]
+				var n00 := _hash_to_float(seed, ix, jy, profile)
+				var n10 := _hash_to_float(seed, ix + 1, jy, profile)
+				var n01 := _hash_to_float(seed, ix, jy + 1, profile)
+				var n11 := _hash_to_float(seed, ix + 1, jy + 1, profile)
+				var nx0 := lerpf(n00, n10, u)
+				var nx1 := lerpf(n01, n11, u)
+				dest[y * resolution + x] += lerpf(nx0, nx1, v) * amplitude
+
+	if profile != null:
+		profile.simplex_usec += Time.get_ticks_usec() - start_usec
 
 
 ## Sample terrain height at a world position
@@ -454,15 +643,16 @@ static func _determine_biome(config: TerrainConfig, height: float, latitude: flo
 	return _determine_biome_xy(config, height, latitude, world_pos.x, world_pos.y, null)
 
 static func _determine_biome_xy(config: TerrainConfig, height: float, latitude: float, world_x: float, world_y: float, profile: TerrainProfile) -> int:
+	var moisture := _simplex_2d_xy(config.seed + 99999, world_x * 0.003, world_y * 0.003, profile) * 0.5 + 0.5
+	return _determine_biome_from_moisture(config, height, latitude, moisture)
+
+static func _determine_biome_from_moisture(config: TerrainConfig, height: float, latitude: float, moisture: float) -> int:
 	var abs_lat: float = abs(latitude)
 
 	# Temperature decreases with latitude and altitude
 	var temp := config.avg_temperature
 	temp -= abs_lat * 0.5  # Cooler toward poles
 	temp -= maxf(0.0, height - config.sea_level) * 50.0  # Cooler at altitude
-
-	# Moisture (simplified: use noise)
-	var moisture := _simplex_2d_xy(config.seed + 99999, world_x * 0.003, world_y * 0.003, profile) * 0.5 + 0.5
 
 	# Water bodies
 	if height < config.sea_level:
