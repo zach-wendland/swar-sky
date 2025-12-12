@@ -254,14 +254,14 @@ static func _generate_linear_temple(layout: RuinsLayout, rng: PRNG) -> void:
 	layout.artifact_position = pedestal.local_position + Vector3(0, 1.5, 0)
 
 	# Wall segments
-	for side in [-1, 1]:
-		var perp := Vector3(-sin(axis), 0, cos(axis)) * side * width * 0.5
+	for side: int in [-1, 1]:
+		var perp_offset: Vector3 = Vector3(-sin(axis), 0, cos(axis)) * float(side) * width * 0.5
 		var wall_count := rng.next_int_range(2, 4)
 		for i in range(wall_count):
 			var t := rng.next_float_range(0.1, 0.8)
 			var wall := StructureElement.new()
 			wall.element_type = ElementType.WALL_SEGMENT
-			wall.local_position = Vector3(cos(axis) * (t * length - length * 0.5), 0, sin(axis) * (t * length - length * 0.5)) + perp
+			wall.local_position = Vector3(cos(axis) * (t * length - length * 0.5), 0, sin(axis) * (t * length - length * 0.5)) + perp_offset
 			wall.rotation = axis
 			wall.damaged = rng.next_float() < 0.4
 			layout.elements.append(wall)

@@ -4,9 +4,9 @@ class_name POIRenderer
 extends Node3D
 
 
-signal poi_entered(poi: POIGenerator.POIData)
-signal poi_exited(poi: POIGenerator.POIData)
-signal artifact_collected(poi: POIGenerator.POIData, artifact_name: String)
+signal poi_entered(poi)
+signal poi_exited(poi)
+signal artifact_collected(poi, artifact_name: String)
 
 
 ## Rendering settings
@@ -14,17 +14,20 @@ signal artifact_collected(poi: POIGenerator.POIData, artifact_name: String)
 @export var detail_distance: float = 150.0
 
 ## POI data
-var pois: Array[POIGenerator.POIData] = []
+var pois: Array = []  # Array of POIGenerator.POIData-like objects
 var poi_nodes: Dictionary = {}  # POI -> Node3D
 var artifact_nodes: Dictionary = {}  # POI -> artifact mesh
 
 ## Player tracking
 var player_position: Vector3 = Vector3.ZERO
-var current_poi: POIGenerator.POIData = null
+var current_poi = null
 
 ## Artifact interaction
-var nearby_artifact: POIGenerator.POIData = null
+var nearby_artifact = null
 var artifact_collect_distance: float = 3.0
+
+var _poi_generator = null
+var _jedi_ruins_generator = null
 
 
 func _process(_delta: float) -> void:
@@ -34,7 +37,7 @@ func _process(_delta: float) -> void:
 
 
 ## Initialize with POI data
-func initialize(poi_list: Array[POIGenerator.POIData]) -> void:
+func initialize(poi_list: Array) -> void:
 	pois = poi_list
 
 	# Pre-generate all POI structures
@@ -42,8 +45,20 @@ func initialize(poi_list: Array[POIGenerator.POIData]) -> void:
 		_create_poi_structure(poi)
 
 
+func _get_poi_generator():
+	if _poi_generator == null:
+		_poi_generator = load("res://packages/procgen/poi_generator.gd")
+	return _poi_generator
+
+
+func _get_jedi_ruins_generator():
+	if _jedi_ruins_generator == null:
+		_jedi_ruins_generator = load("res://packages/procgen/poi_grammars/jedi_ruins.gd")
+	return _jedi_ruins_generator
+
+
 ## Create 3D structure for a POI
-func _create_poi_structure(poi: POIGenerator.POIData) -> void:
+func _create_poi_structure(poi) -> void:
 	var poi_root := Node3D.new()
 	poi_root.name = "POI_%d" % poi.seed
 	poi_root.position = poi.position
@@ -53,15 +68,15 @@ func _create_poi_structure(poi: POIGenerator.POIData) -> void:
 	poi_nodes[poi] = poi_root
 
 	# Generate structure based on POI type
-	match poi.poi_type:
-		POIGenerator.POIType.JEDI_RUINS:
-			_build_jedi_ruins(poi, poi_root)
-		POIGenerator.POIType.IMPERIAL_OUTPOST:
-			_build_imperial_outpost(poi, poi_root)
-		POIGenerator.POIType.CRASHED_SHIP:
-			_build_crashed_ship(poi, poi_root)
-		_:
-			_build_generic_poi(poi, poi_root)
+	var poi_gen = _get_poi_generator()
+	if poi_gen != null and poi.poi_type == poi_gen.POIType.JEDI_RUINS:
+		_build_jedi_ruins(poi, poi_root)
+	elif poi_gen != null and poi.poi_type == poi_gen.POIType.IMPERIAL_OUTPOST:
+		_build_imperial_outpost(poi, poi_root)
+	elif poi_gen != null and poi.poi_type == poi_gen.POIType.CRASHED_SHIP:
+		_build_crashed_ship(poi, poi_root)
+	else:
+		_build_generic_poi(poi, poi_root)
 
 	# Create artifact (collectible)
 	_create_artifact(poi, poi_root)
@@ -71,8 +86,12 @@ func _create_poi_structure(poi: POIGenerator.POIData) -> void:
 
 
 ## Build Jedi Ruins structure
-func _build_jedi_ruins(poi: POIGenerator.POIData, root: Node3D) -> void:
-	var layout := JediRuinsGenerator.generate_ruins(poi.seed, poi.size)
+func _build_jedi_ruins(poi, root: Node3D) -> void:
+	var gen = _get_jedi_ruins_generator()
+	if gen == null:
+		return
+
+	var layout = gen.generate_ruins(int(poi.seed), float(poi.size))
 
 	for element in layout.elements:
 		var mesh := _create_element_mesh(element)
@@ -84,9 +103,9 @@ func _build_jedi_ruins(poi: POIGenerator.POIData, root: Node3D) -> void:
 
 
 ## Build Imperial Outpost
-func _build_imperial_outpost(poi: POIGenerator.POIData, root: Node3D) -> void:
-	var rng := PRNG.new(poi.seed)
-	var size := poi.size
+func _build_imperial_outpost(poi, root: Node3D) -> void:
+	var rng := PRNG.new(int(poi.seed))
+	var size: float = float(poi.size)
 
 	# Main building (bunker style)
 	var bunker := _create_box_mesh(Vector3(size * 0.4, 4, size * 0.3), Color(0.4, 0.4, 0.45))
@@ -120,9 +139,9 @@ func _build_imperial_outpost(poi: POIGenerator.POIData, root: Node3D) -> void:
 
 
 ## Build Crashed Ship
-func _build_crashed_ship(poi: POIGenerator.POIData, root: Node3D) -> void:
-	var rng := PRNG.new(poi.seed)
-	var size := poi.size
+func _build_crashed_ship(poi, root: Node3D) -> void:
+	var rng := PRNG.new(int(poi.seed))
+	var size: float = float(poi.size)
 
 	# Main hull (tilted)
 	var hull := _create_box_mesh(Vector3(size * 0.5, 4, size * 0.2), Color(0.35, 0.3, 0.28))
@@ -155,12 +174,13 @@ func _build_crashed_ship(poi: POIGenerator.POIData, root: Node3D) -> void:
 
 
 ## Build generic POI (placeholder)
-func _build_generic_poi(poi: POIGenerator.POIData, root: Node3D) -> void:
-	var type_data := poi.get_type_data()
+func _build_generic_poi(poi, root: Node3D) -> void:
+	var type_data: Dictionary = poi.get_type_data() as Dictionary
 	var color: Color = type_data.get("color", Color.GRAY)
+	var poi_size: float = float(poi.size)
 
 	# Simple marker structure
-	var base := _create_cylinder_mesh(poi.size * 0.3, 0.5, color.darkened(0.2))
+	var base := _create_cylinder_mesh(poi_size * 0.3, 0.5, color.darkened(0.2))
 	base.position = Vector3(0, 0.25, 0)
 	root.add_child(base)
 
@@ -171,7 +191,7 @@ func _build_generic_poi(poi: POIGenerator.POIData, root: Node3D) -> void:
 
 
 ## Create artifact collectible
-func _create_artifact(poi: POIGenerator.POIData, root: Node3D) -> void:
+func _create_artifact(poi, root: Node3D) -> void:
 	var artifact := Node3D.new()
 	artifact.name = "Artifact"
 	artifact.position = poi.artifact_position
@@ -204,7 +224,7 @@ func _create_artifact(poi: POIGenerator.POIData, root: Node3D) -> void:
 
 
 ## Create distant POI marker
-func _create_poi_marker(poi: POIGenerator.POIData, root: Node3D) -> void:
+func _create_poi_marker(poi, root: Node3D) -> void:
 	var marker := Node3D.new()
 	marker.name = "DistantMarker"
 
@@ -216,7 +236,7 @@ func _create_poi_marker(poi: POIGenerator.POIData, root: Node3D) -> void:
 	cylinder.height = 50
 	beam.mesh = cylinder
 
-	var type_data := poi.get_type_data()
+	var type_data: Dictionary = poi.get_type_data() as Dictionary
 	var mat := StandardMaterial3D.new()
 	mat.emission_enabled = true
 	mat.emission = type_data.get("marker_color", Color.WHITE)
@@ -232,8 +252,8 @@ func _create_poi_marker(poi: POIGenerator.POIData, root: Node3D) -> void:
 
 
 ## Create mesh helpers
-func _create_element_mesh(element: JediRuinsGenerator.StructureElement) -> MeshInstance3D:
-	var data := element.get_data()
+func _create_element_mesh(element) -> MeshInstance3D:
+	var data: Dictionary = element.get_data() as Dictionary
 	var mesh_type: String = data.get("mesh", "box")
 	var size: Vector3 = data.get("size", Vector3.ONE)
 	var color: Color = data.get("color", Color.GRAY)
@@ -341,17 +361,17 @@ func _update_poi_visibility() -> void:
 		# Hide artifact if collected
 		var artifact: Node3D = artifact_nodes.get(poi)
 		if artifact:
-			artifact.visible = not poi.artifact_collected and dist < detail_distance
+			artifact.visible = poi.discovered and not poi.artifact_collected and dist < detail_distance
 
 
 ## Check proximity to POIs and artifacts
 func _check_poi_proximity() -> void:
-	var was_inside := current_poi
+	var was_inside = current_poi
 
 	# Check POI boundaries
 	current_poi = null
 	for poi in pois:
-		if POIGenerator.is_inside_poi(poi, player_position):
+		if _is_inside_poi(poi, player_position):
 			current_poi = poi
 			if not poi.discovered:
 				poi.discovered = true
@@ -364,15 +384,25 @@ func _check_poi_proximity() -> void:
 	# Check artifact proximity
 	nearby_artifact = null
 	for poi in pois:
+		if not poi.discovered:
+			continue
 		if poi.artifact_collected:
 			continue
 
-		var artifact_world_pos := poi.get_world_artifact_position()
+		var artifact_world_pos: Vector3 = poi.get_world_artifact_position()
 		var dist := player_position.distance_to(artifact_world_pos)
 
 		if dist < artifact_collect_distance:
 			nearby_artifact = poi
 			break
+
+
+static func _is_inside_poi(poi, world_pos: Vector3) -> bool:
+	var center: Vector3 = poi.position
+	var dx: float = world_pos.x - center.x
+	var dz: float = world_pos.z - center.z
+	var horizontal_dist: float = Vector2(dx, dz).length()
+	return horizontal_dist < float(poi.size) * 0.6
 
 
 ## Animate artifacts (bobbing, rotation)
@@ -394,7 +424,7 @@ func update_player_position(pos: Vector3) -> void:
 
 ## Try to collect nearby artifact
 func try_collect_artifact() -> bool:
-	if nearby_artifact and not nearby_artifact.artifact_collected:
+	if nearby_artifact and nearby_artifact.discovered and not nearby_artifact.artifact_collected:
 		nearby_artifact.artifact_collected = true
 		artifact_collected.emit(nearby_artifact, nearby_artifact.artifact_name)
 
@@ -427,8 +457,8 @@ func get_nearest_undiscovered_distance() -> float:
 
 
 ## Get all discovered POIs
-func get_discovered_pois() -> Array[POIGenerator.POIData]:
-	var result: Array[POIGenerator.POIData] = []
+func get_discovered_pois() -> Array:
+	var result: Array = []
 	for poi in pois:
 		if poi.discovered:
 			result.append(poi)
