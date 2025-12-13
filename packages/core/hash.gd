@@ -57,7 +57,7 @@ static func hash_combine(seed: int, values: Array) -> int:
 			# Convert float to int bits for determinism
 			h = _mix(h, _float_to_int_bits(v))
 		elif v is String:
-			h = _mix(h, v.hash())
+			h = _hash_string(h, v)
 		elif v is Vector2i:
 			h = _mix(h, v.x)
 			h = _mix(h, v.y)
@@ -114,3 +114,12 @@ static func _float_to_int_bits(f: float) -> int:
 	bytes.resize(8)
 	bytes.encode_double(0, f)
 	return bytes.decode_s64(0)
+
+
+## Internal: Deterministic string hash (replaces platform-dependent String.hash())
+## Iterates UTF-8 bytes for consistent results across all platforms
+static func _hash_string(h: int, s: String) -> int:
+	var utf8 := s.to_utf8_buffer()
+	for byte in utf8:
+		h = _mix(h, byte)
+	return h
