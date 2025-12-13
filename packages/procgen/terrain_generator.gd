@@ -135,6 +135,71 @@ class TerrainConfig:
 	var erosion_strength: float = 1.0
 
 
+## Scratch buffers for terrain generation (avoids per-tile allocations / GC pressure)
+## Pre-allocate once, reuse across all tile generations
+class TerrainScratch:
+	## Maximum resolution we support (buffers sized for this)
+	const MAX_RESOLUTION: int = 65
+
+	## Accumulated height values (total_points)
+	var accum: PackedFloat32Array
+	## Per-layer accumulator (total_points)
+	var layer_accum: PackedFloat32Array
+	## Moisture field (total_points)
+	var moisture: PackedFloat32Array
+
+	## Coordinate caches for simplex sampling (MAX_RESOLUTION each)
+	var i_x: PackedInt64Array
+	var u_x: PackedFloat32Array
+	var j_y: PackedInt64Array
+	var v_y: PackedFloat32Array
+
+	## Lattice cache - sized for worst case (resolution+1)^2
+	var lattice: PackedFloat32Array
+
+	func _init() -> void:
+		var max_points := MAX_RESOLUTION * MAX_RESOLUTION
+		accum = PackedFloat32Array()
+		accum.resize(max_points)
+		layer_accum = PackedFloat32Array()
+		layer_accum.resize(max_points)
+		moisture = PackedFloat32Array()
+		moisture.resize(max_points)
+
+		i_x = PackedInt64Array()
+		i_x.resize(MAX_RESOLUTION)
+		u_x = PackedFloat32Array()
+		u_x.resize(MAX_RESOLUTION)
+		j_y = PackedInt64Array()
+		j_y.resize(MAX_RESOLUTION)
+		v_y = PackedFloat32Array()
+		v_y.resize(MAX_RESOLUTION)
+
+		# Lattice worst-case: (resolution+1)^2 for full grid
+		lattice = PackedFloat32Array()
+		lattice.resize((MAX_RESOLUTION + 1) * (MAX_RESOLUTION + 1))
+
+	## Clear accumulators before tile generation
+	func clear_for_tile(total_points: int) -> void:
+		for i in range(total_points):
+			accum[i] = 0.0
+			moisture[i] = 0.0
+
+	## Clear layer accumulator before each layer
+	func clear_layer_accum(total_points: int) -> void:
+		for i in range(total_points):
+			layer_accum[i] = 0.0
+
+
+## Thread-local scratch buffer (one per thread in future, currently single-threaded)
+static var _scratch: TerrainScratch = null
+
+static func _get_scratch() -> TerrainScratch:
+	if _scratch == null:
+		_scratch = TerrainScratch.new()
+	return _scratch
+
+
 ## Generated tile data (named TerrainTileData to avoid conflict with Godot's TileData)
 class TerrainTileData:
 	var tile_coords: Vector2i
@@ -278,23 +343,26 @@ static func generate_tile(config: TerrainConfig, tile_coords: Vector2i, lod: int
 	var world_offset_x := float(tile_coords.x) * tile_size
 	var world_offset_y := float(tile_coords.y) * tile_size
 
+	# Get scratch buffers (reused across tiles to avoid GC pressure)
+	var scratch := _get_scratch()
+	scratch.clear_for_tile(total_points)
+
 	var height_start_usec := 0
 	if profile != null:
 		height_start_usec = Time.get_ticks_usec()
 
 	# Build heightmap using cached per-octave sampling (slashing hash calls when reuse exists)
-	_fill_tile_heightmap(config, world_offset_x, world_offset_y, step, resolution, lod, tile.heightmap, profile)
+	_fill_tile_heightmap(config, world_offset_x, world_offset_y, step, resolution, lod, tile.heightmap, profile, scratch)
 
 	if profile != null:
 		profile.height_usec = Time.get_ticks_usec() - height_start_usec
 
-	# Moisture field for biomes (cached, one octave)
+	# Moisture field for biomes (cached, one octave) - uses scratch.moisture buffer
 	var moisture_start_usec := 0
 	if profile != null:
 		moisture_start_usec = Time.get_ticks_usec()
-	var moisture := PackedFloat32Array()
-	moisture.resize(total_points)
-	_accumulate_simplex_tile_into(config.seed + 99999, world_offset_x, world_offset_y, step, resolution, 0.003, 1.0, moisture, profile)
+	var moisture := scratch.moisture  # Reuse scratch buffer (already cleared)
+	_accumulate_simplex_tile_into(config.seed + 99999, world_offset_x, world_offset_y, step, resolution, 0.003, 1.0, moisture, profile, scratch)
 	if profile != null:
 		profile.biome_usec += Time.get_ticks_usec() - moisture_start_usec
 
@@ -338,11 +406,12 @@ static func _fill_tile_heightmap(
 	resolution: int,
 	lod: int,
 	out_heightmap: PackedFloat32Array,
-	profile: TerrainProfile
+	profile: TerrainProfile,
+	scratch: TerrainScratch
 ) -> void:
 	var total_points := resolution * resolution
-	var accum := PackedFloat32Array()
-	accum.resize(total_points)
+	# Use scratch buffer instead of allocating (cleared before call)
+	var accum := scratch.accum
 
 	# Get LOD-based octave reductions
 	var lod_reductions: Dictionary = LOD_OCTAVE_REDUCTION.get(lod, {})
@@ -370,8 +439,9 @@ static func _fill_tile_heightmap(
 			weight *= config.erosion_strength
 
 		var layer_seed := config.seed + layer
-		var layer_accum := PackedFloat32Array()
-		layer_accum.resize(total_points)
+		# Use scratch buffer instead of allocating
+		var layer_accum := scratch.layer_accum
+		scratch.clear_layer_accum(total_points)
 
 		var amplitude := 1.0
 		var frequency := scale
@@ -382,7 +452,7 @@ static func _fill_tile_heightmap(
 			fbm_start_usec = Time.get_ticks_usec()
 
 		for octave in range(octaves):
-			_accumulate_simplex_tile_into(layer_seed + octave * 1000, world_offset_x, world_offset_y, step, resolution, frequency, amplitude, layer_accum, profile)
+			_accumulate_simplex_tile_into(layer_seed + octave * 1000, world_offset_x, world_offset_y, step, resolution, frequency, amplitude, layer_accum, profile, scratch)
 			max_value += amplitude
 			amplitude *= persistence
 			frequency *= 2.0
@@ -416,7 +486,8 @@ static func _accumulate_simplex_tile_into(
 	frequency: float,
 	amplitude: float,
 	dest: PackedFloat32Array,
-	profile: TerrainProfile
+	profile: TerrainProfile,
+	scratch: TerrainScratch
 ) -> void:
 	var start_usec := 0
 	if profile != null:
@@ -424,15 +495,11 @@ static func _accumulate_simplex_tile_into(
 
 	var total_points := resolution * resolution
 
-	var i_x := PackedInt64Array()
-	i_x.resize(resolution)
-	var u_x := PackedFloat32Array()
-	u_x.resize(resolution)
-
-	var j_y := PackedInt64Array()
-	j_y.resize(resolution)
-	var v_y := PackedFloat32Array()
-	v_y.resize(resolution)
+	# Use scratch buffers instead of allocating
+	var i_x := scratch.i_x
+	var u_x := scratch.u_x
+	var j_y := scratch.j_y
+	var v_y := scratch.v_y
 
 	var i_min := 0
 	var i_max := 0
@@ -474,8 +541,8 @@ static func _accumulate_simplex_tile_into(
 	var direct_hashes := total_points * 4
 
 	if lattice_points > 0 and lattice_points <= direct_hashes:
-		var lattice := PackedFloat32Array()
-		lattice.resize(lattice_points)
+		# Use scratch lattice buffer instead of allocating
+		var lattice := scratch.lattice
 		var write_idx := 0
 		for gy in range(j_min, j_max + 2):
 			for gx in range(i_min, i_max + 2):
