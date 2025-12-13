@@ -137,7 +137,10 @@ class PlanetDetail:
 
 	func get_resource_summary() -> String:
 		var parts: Array[String] = []
-		for r in resources:
+		# Sort keys for deterministic iteration order
+		var resource_keys := resources.keys()
+		resource_keys.sort()
+		for r in resource_keys:
 			if resources[r] > 0.5:
 				parts.append(RESOURCE_DATA[r]["name"] + " (Rich)")
 			elif resources[r] > 0.2:
@@ -452,7 +455,10 @@ static func _generate_description(detail: PlanetDetail, rng: PRNG) -> String:
 
 	# Resource notes
 	var rich_resources: Array[String] = []
-	for r in detail.resources:
+	# Sort keys for deterministic iteration order
+	var resource_keys := detail.resources.keys()
+	resource_keys.sort()
+	for r in resource_keys:
 		if detail.resources[r] > 0.6:
 			rich_resources.append(RESOURCE_DATA[r]["name"])
 	if rich_resources.size() > 0:

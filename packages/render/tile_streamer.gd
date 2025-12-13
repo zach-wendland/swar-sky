@@ -82,9 +82,17 @@ func force_update() -> void:
 	_update_tiles_immediate()
 
 
+## Deterministic comparator for Vector2i coordinates (cached to avoid allocation)
+static func _compare_coords(a: Vector2i, b: Vector2i) -> bool:
+	return a.x < b.x or (a.x == b.x and a.y < b.y)
+
+
 ## Clear all loaded tiles
 func clear_all_tiles() -> void:
-	for coords in _loaded_tiles:
+	# Sort keys for deterministic iteration order
+	var coords_list := _loaded_tiles.keys()
+	coords_list.sort_custom(_compare_coords)
+	for coords in coords_list:
 		var mesh: MeshInstance3D = _loaded_tiles[coords]
 		if is_instance_valid(mesh):
 			mesh.queue_free()
@@ -105,9 +113,11 @@ func _update_tiles() -> void:
 			var coords := _player_tile + Vector2i(dx, dy)
 			needed_tiles[coords] = true
 
-	# Unload tiles that are too far
+	# Unload tiles that are too far (sort for deterministic order)
 	var to_unload: Array[Vector2i] = []
-	for coords in _loaded_tiles:
+	var loaded_coords := _loaded_tiles.keys()
+	loaded_coords.sort_custom(_compare_coords)
+	for coords in loaded_coords:
 		if not needed_tiles.has(coords):
 			to_unload.append(coords)
 
