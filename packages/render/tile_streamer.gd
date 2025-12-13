@@ -1,7 +1,11 @@
 ## tile_streamer.gd - Manages terrain tile loading/unloading around player
 ## Streams tiles in a grid pattern, prioritizing nearby tiles
+## Supports async (background thread) tile generation for smoother streaming
 class_name TileStreamer
 extends Node3D
+
+# Preload worker to ensure class is available (class_name can fail in some load orders)
+const TerrainWorkerScript = preload("res://packages/procgen/terrain_worker.gd")
 
 
 signal tile_loaded(coords: Vector2i)
@@ -13,6 +17,7 @@ signal tile_unloaded(coords: Vector2i)
 @export var height_scale: float = 100.0         # Vertical exaggeration
 @export var tile_resolution: int = 33           # Vertices per tile edge (LOD 0)
 @export var update_interval: float = 0.5        # Seconds between update checks
+@export var use_async: bool = true              # Use background thread for tile generation
 
 ## LOD configuration: resolution per distance tier
 const LOD_RESOLUTIONS: Array[int] = [33, 17, 17]  # LOD 0 (near), LOD 1 (mid), LOD 2 (far)
@@ -30,6 +35,9 @@ var _update_timer: float = 0.0
 var _terrain_material: Material = null
 var _water_mesh: MeshInstance3D = null
 
+## Async worker (when use_async is true)
+var _worker = null  # TerrainWorker instance
+
 ## Performance tracking
 var _tiles_generated_this_frame: int = 0
 var _max_tiles_per_frame: int = 2
@@ -38,14 +46,50 @@ var _max_tiles_per_frame: int = 2
 func _ready() -> void:
 	_terrain_material = TerrainMesh.create_terrain_material(true)
 
+	# Start async worker if enabled
+	if use_async:
+		_worker = TerrainWorkerScript.new()
+		_worker.start()
+
+
+func _exit_tree() -> void:
+	# Clean up worker thread
+	if _worker != null:
+		_worker.stop()
+		_worker = null
+
 
 func _process(delta: float) -> void:
+	# Poll for completed async tiles every frame
+	if _worker != null:
+		_process_completed_tiles()
+
 	_update_timer += delta
 
 	if _update_timer >= update_interval:
 		_update_timer = 0.0
 		_tiles_generated_this_frame = 0
 		_update_tiles()
+
+
+## Process tiles completed by the background worker
+func _process_completed_tiles() -> void:
+	var completed: Array = _worker.get_completed_tiles()
+
+	for result in completed:
+		# Skip if tile was unloaded while generating
+		if _loaded_tiles.has(result.coords):
+			continue
+
+		# Build mesh on main thread
+		var mesh_instance := TerrainMesh.create_tile_mesh(result.tile_data, tile_size, height_scale)
+		mesh_instance.material_override = _terrain_material
+
+		# Add to scene
+		add_child(mesh_instance)
+		_loaded_tiles[result.coords] = mesh_instance
+
+		tile_loaded.emit(result.coords)
 
 
 ## Initialize with planet data
@@ -100,6 +144,15 @@ func _compare_by_distance(a: Vector2i, b: Vector2i) -> bool:
 
 ## Clear all loaded tiles
 func clear_all_tiles() -> void:
+	# Cancel all pending async requests
+	if _worker != null:
+		# Get all pending coords and cancel them
+		var pending_coords := _loaded_tiles.keys()  # Not accurate, but we'll clear queue anyway
+		for coords in pending_coords:
+			_worker.cancel_request(coords)
+		# Process any completed tiles that came through
+		_process_completed_tiles()
+
 	# Sort keys for deterministic iteration order
 	var coords_list := _loaded_tiles.keys()
 	coords_list.sort_custom(_compare_coords)
@@ -139,24 +192,47 @@ func _update_tiles() -> void:
 	var to_load: Array[Vector2i] = []
 	for coords in needed_tiles:
 		if not _loaded_tiles.has(coords):
+			# Skip if already pending in async queue
+			if _worker != null and _worker.is_pending(coords):
+				continue
 			to_load.append(coords)
 
 	# Sort by distance from player
 	to_load.sort_custom(_compare_by_distance)
 
-	# Load tiles up to frame budget
-	for coords in to_load:
-		if _tiles_generated_this_frame >= _max_tiles_per_frame:
-			break
-		_load_tile(coords)
+	# Load tiles up to frame budget (sync mode) or submit all (async mode)
+	if _worker != null:
+		# Async mode: submit all needed tiles to worker queue
+		for coords in to_load:
+			_load_tile_async(coords)
+	else:
+		# Sync mode: respect frame budget
+		for coords in to_load:
+			if _tiles_generated_this_frame >= _max_tiles_per_frame:
+				break
+			_load_tile_sync(coords)
 
 
 ## Load all needed tiles immediately (ignores frame budget)
+## In async mode, this submits all tiles and waits for completion
 func _update_tiles_immediate() -> void:
-	var old_max := _max_tiles_per_frame
-	_max_tiles_per_frame = 100  # No limit
-	_update_tiles()
-	_max_tiles_per_frame = old_max
+	if _worker != null:
+		# Async mode: submit all tiles
+		var old_max := _max_tiles_per_frame
+		_max_tiles_per_frame = 100
+		_update_tiles()
+		_max_tiles_per_frame = old_max
+
+		# Wait for all pending tiles to complete (blocking)
+		while _worker.get_pending_count() > 0:
+			OS.delay_msec(10)
+			_process_completed_tiles()
+	else:
+		# Sync mode: generate all tiles directly
+		var old_max := _max_tiles_per_frame
+		_max_tiles_per_frame = 100  # No limit
+		_update_tiles()
+		_max_tiles_per_frame = old_max
 
 
 ## Calculate LOD level based on distance from player
@@ -170,8 +246,8 @@ func _get_tile_lod(coords: Vector2i) -> int:
 		return 2  # Lowest quality
 
 
-## Load a single tile
-func _load_tile(coords: Vector2i) -> void:
+## Load a single tile synchronously (blocking)
+func _load_tile_sync(coords: Vector2i) -> void:
 	if terrain_config == null:
 		return
 
@@ -197,8 +273,39 @@ func _load_tile(coords: Vector2i) -> void:
 	tile_loaded.emit(coords)
 
 
+## Load a single tile asynchronously (non-blocking)
+func _load_tile_async(coords: Vector2i) -> void:
+	if terrain_config == null:
+		return
+
+	if _loaded_tiles.has(coords):
+		return  # Already loaded
+
+	if _worker.is_pending(coords):
+		return  # Already in queue
+
+	# Calculate LOD based on distance
+	var lod := _get_tile_lod(coords)
+	var resolution := LOD_RESOLUTIONS[lod]
+
+	# Submit to worker queue
+	_worker.request_tile(coords, lod, resolution, terrain_config)
+
+
+## Legacy compatibility wrapper
+func _load_tile(coords: Vector2i) -> void:
+	if _worker != null:
+		_load_tile_async(coords)
+	else:
+		_load_tile_sync(coords)
+
+
 ## Unload a single tile
 func _unload_tile(coords: Vector2i) -> void:
+	# Cancel pending async request if any
+	if _worker != null:
+		_worker.cancel_request(coords)
+
 	if not _loaded_tiles.has(coords):
 		return
 
@@ -260,6 +367,9 @@ func print_stats() -> void:
 	print("[TileStreamer] Loaded tiles: ", _loaded_tiles.size())
 	print("[TileStreamer] Player tile: ", _player_tile)
 	print("[TileStreamer] View distance: ", view_distance)
+	print("[TileStreamer] Async mode: ", "enabled" if _worker != null else "disabled")
+	if _worker != null:
+		print("[TileStreamer] Pending tiles: ", _worker.get_pending_count())
 	if terrain_config:
 		print("[TileStreamer] Sea level: ", terrain_config.sea_level)
 		print("[TileStreamer] Water coverage: ", terrain_config.water_coverage)
