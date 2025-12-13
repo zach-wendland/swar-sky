@@ -87,6 +87,13 @@ static func _compare_coords(a: Vector2i, b: Vector2i) -> bool:
 	return a.x < b.x or (a.x == b.x and a.y < b.y)
 
 
+## Compare tiles by distance from player (for load priority sorting)
+func _compare_by_distance(a: Vector2i, b: Vector2i) -> bool:
+	var dist_a := (a - _player_tile).length_squared()
+	var dist_b := (b - _player_tile).length_squared()
+	return dist_a < dist_b
+
+
 ## Clear all loaded tiles
 func clear_all_tiles() -> void:
 	# Sort keys for deterministic iteration order
@@ -131,11 +138,7 @@ func _update_tiles() -> void:
 			to_load.append(coords)
 
 	# Sort by distance from player
-	to_load.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
-		var dist_a := (a - _player_tile).length_squared()
-		var dist_b := (b - _player_tile).length_squared()
-		return dist_a < dist_b
-	)
+	to_load.sort_custom(_compare_by_distance)
 
 	# Load tiles up to frame budget
 	for coords in to_load:
