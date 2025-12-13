@@ -11,8 +11,12 @@ signal tile_unloaded(coords: Vector2i)
 @export var tile_size: float = 500.0           # World units per tile
 @export var view_distance: int = 3              # Tiles to load in each direction
 @export var height_scale: float = 100.0         # Vertical exaggeration
-@export var tile_resolution: int = 33           # Vertices per tile edge
+@export var tile_resolution: int = 33           # Vertices per tile edge (LOD 0)
 @export var update_interval: float = 0.5        # Seconds between update checks
+
+## LOD configuration: resolution per distance tier
+const LOD_RESOLUTIONS: Array[int] = [33, 17, 17]  # LOD 0 (near), LOD 1 (mid), LOD 2 (far)
+const LOD_DISTANCE_THRESHOLDS: Array[int] = [1, 2]  # Distance in tiles for LOD transitions
 
 ## Planet data
 var terrain_config: TerrainGenerator.TerrainConfig = null
@@ -155,6 +159,17 @@ func _update_tiles_immediate() -> void:
 	_max_tiles_per_frame = old_max
 
 
+## Calculate LOD level based on distance from player
+func _get_tile_lod(coords: Vector2i) -> int:
+	var distance := (coords - _player_tile).length()
+	if distance <= LOD_DISTANCE_THRESHOLDS[0]:
+		return 0  # Highest quality
+	elif distance <= LOD_DISTANCE_THRESHOLDS[1]:
+		return 1  # Medium quality
+	else:
+		return 2  # Lowest quality
+
+
 ## Load a single tile
 func _load_tile(coords: Vector2i) -> void:
 	if terrain_config == null:
@@ -163,8 +178,12 @@ func _load_tile(coords: Vector2i) -> void:
 	if _loaded_tiles.has(coords):
 		return  # Already loaded
 
-	# Generate tile data
-	var tile_data := TerrainGenerator.generate_tile(terrain_config, coords, 0, tile_resolution)
+	# Calculate LOD based on distance
+	var lod := _get_tile_lod(coords)
+	var resolution := LOD_RESOLUTIONS[lod]
+
+	# Generate tile data with LOD-appropriate resolution
+	var tile_data := TerrainGenerator.generate_tile(terrain_config, coords, lod, resolution)
 
 	# Create mesh
 	var mesh_instance := TerrainMesh.create_tile_mesh(tile_data, tile_size, height_scale)

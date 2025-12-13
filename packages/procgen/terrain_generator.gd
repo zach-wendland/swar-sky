@@ -13,12 +13,12 @@ enum NoiseLayer {
 	EROSION,        # Simulated erosion patterns
 }
 
-## Noise parameters per layer
+## Noise parameters per layer (optimized: reduced octaves on expensive layers)
 const NOISE_PARAMS: Dictionary = {
 	NoiseLayer.CONTINENTAL: { "scale": 0.001, "octaves": 4, "persistence": 0.5, "weight": 1.0 },
-	NoiseLayer.MOUNTAIN:    { "scale": 0.005, "octaves": 5, "persistence": 0.6, "weight": 0.4 },
-	NoiseLayer.HILLS:       { "scale": 0.02,  "octaves": 4, "persistence": 0.5, "weight": 0.15 },
-	NoiseLayer.DETAIL:      { "scale": 0.1,   "octaves": 3, "persistence": 0.4, "weight": 0.05 },
+	NoiseLayer.MOUNTAIN:    { "scale": 0.005, "octaves": 4, "persistence": 0.6, "weight": 0.4 },  # 5→4
+	NoiseLayer.HILLS:       { "scale": 0.02,  "octaves": 3, "persistence": 0.5, "weight": 0.15 }, # 4→3
+	NoiseLayer.DETAIL:      { "scale": 0.1,   "octaves": 2, "persistence": 0.4, "weight": 0.05 }, # 3→2
 	NoiseLayer.EROSION:     { "scale": 0.008, "octaves": 3, "persistence": 0.7, "weight": -0.1 },
 }
 
@@ -31,6 +31,13 @@ const NOISE_LAYER_ORDER: Array[int] = [
 ]
 
 const NOISE_LAYER_COUNT: int = NoiseLayer.EROSION + 1
+
+## LOD-based octave reduction (negative values reduce octaves for distant tiles)
+const LOD_OCTAVE_REDUCTION: Dictionary = {
+	0: {},  # LOD 0: Full quality (no reduction)
+	1: { NoiseLayer.DETAIL: 1, NoiseLayer.HILLS: 1 },  # LOD 1: Reduce detail/hills by 1 octave
+	2: { NoiseLayer.DETAIL: 2, NoiseLayer.HILLS: 1, NoiseLayer.MOUNTAIN: 1 },  # LOD 2: More aggressive
+}
 
 class TerrainProfile:
 	var total_usec: int = 0
@@ -276,7 +283,7 @@ static func generate_tile(config: TerrainConfig, tile_coords: Vector2i, lod: int
 		height_start_usec = Time.get_ticks_usec()
 
 	# Build heightmap using cached per-octave sampling (slashing hash calls when reuse exists)
-	_fill_tile_heightmap(config, world_offset_x, world_offset_y, step, resolution, tile.heightmap, profile)
+	_fill_tile_heightmap(config, world_offset_x, world_offset_y, step, resolution, lod, tile.heightmap, profile)
 
 	if profile != null:
 		profile.height_usec = Time.get_ticks_usec() - height_start_usec
@@ -329,12 +336,16 @@ static func _fill_tile_heightmap(
 	world_offset_y: float,
 	step: float,
 	resolution: int,
+	lod: int,
 	out_heightmap: PackedFloat32Array,
 	profile: TerrainProfile
 ) -> void:
 	var total_points := resolution * resolution
 	var accum := PackedFloat32Array()
 	accum.resize(total_points)
+
+	# Get LOD-based octave reductions
+	var lod_reductions: Dictionary = LOD_OCTAVE_REDUCTION.get(lod, {})
 
 	for layer: int in NOISE_LAYER_ORDER:
 		var layer_start_usec := 0
@@ -343,9 +354,13 @@ static func _fill_tile_heightmap(
 
 		var params: Dictionary = NOISE_PARAMS[layer]
 		var scale: float = params["scale"] * config.continental_scale
-		var octaves: int = params["octaves"]
+		var octaves: int = params["octaves"] - lod_reductions.get(layer, 0)  # Apply LOD reduction
 		var persistence: float = params["persistence"]
 		var weight: float = params["weight"]
+
+		# Skip layer entirely if octaves reduced to 0 or below
+		if octaves <= 0:
+			continue
 
 		# Apply roughness modifier
 		if layer in [NoiseLayer.HILLS, NoiseLayer.DETAIL]:
