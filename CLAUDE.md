@@ -20,6 +20,9 @@ godot --path . scenes/main.tscn
 # Run determinism tests
 godot --headless --script packages/core/tests/test_determinism.gd
 godot --headless --script packages/procgen/tests/test_terrain.gd
+
+# Run graphics validation tests (32-bit color compliance)
+godot --headless --script packages/render/tests/test_graphics.gd
 ```
 
 ## Architecture
@@ -40,7 +43,8 @@ swar-sky/
 │   ├── render/
 │   │   ├── terrain_mesh.gd
 │   │   ├── tile_streamer.gd
-│   │   └── poi_renderer.gd         # NEW: 3D POI visualization
+│   │   ├── poi_renderer.gd         # 3D POI visualization
+│   │   └── graphics_validator.gd   # 32-bit color validation (autoload)
 │   ├── gameplay/
 │   │   ├── character_controller.gd
 │   │   ├── ship_controller.gd
@@ -113,6 +117,7 @@ var layout := JediRuinsGenerator.generate_ruins(poi_seed, size)
 | `packages/procgen/poi_generator.gd` | POI placement and types |
 | `packages/procgen/poi_grammars/jedi_ruins.gd` | Ruins structure generator |
 | `packages/render/poi_renderer.gd` | 3D POI mesh rendering |
+| `packages/render/graphics_validator.gd` | Runtime 32-bit color validation |
 | `packages/gameplay/objective_system.gd` | Mission tracking |
 | `packages/gameplay/ship_landing.gd` | Landed ship on surface |
 | `packages/ui/exploration_hud.gd` | Compass, markers, prompts |

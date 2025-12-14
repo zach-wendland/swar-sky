@@ -19,6 +19,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 SeedStack="*res://packages/core/seed_stack.gd"
+GraphicsValidator="*res://packages/render/graphics_validator.gd"
 
 [debug]
 
