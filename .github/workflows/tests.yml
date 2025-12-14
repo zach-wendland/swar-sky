@@ -1,0 +1,82 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  GODOT_VERSION: 4.5.1
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Godot
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          use-dotnet: false
+
+      - name: Verify Godot
+        run: godot --version
+
+      - name: Import project
+        run: godot --headless --import
+        timeout-minutes: 2
+
+      - name: Run determinism tests
+        run: godot --headless --script packages/core/tests/test_determinism.gd
+        timeout-minutes: 2
+
+      - name: Run terrain tests
+        run: godot --headless --script packages/procgen/tests/test_terrain.gd
+        timeout-minutes: 3
+
+      - name: Run tile mapping tests
+        run: godot --headless --script packages/procgen/tests/test_tile_mapping.gd
+        timeout-minutes: 2
+
+      - name: Run generator tests
+        run: godot --headless --script packages/procgen/tests/test_generators.gd
+        timeout-minutes: 3
+
+      - name: Run graphics tests
+        run: godot --headless --script packages/render/tests/test_graphics.gd
+        timeout-minutes: 2
+
+      - name: Run artifact gating tests
+        run: godot --headless --script packages/render/tests/test_artifact_gating.gd
+        timeout-minutes: 2
+
+      - name: Run mission loop tests
+        run: godot --headless --script packages/gameplay/tests/test_mission_loop.gd
+        timeout-minutes: 2
+
+  lint:
+    name: GDScript Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Godot
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          use-dotnet: false
+
+      - name: Check GDScript syntax
+        run: |
+          find packages -name "*.gd" -type f | while read file; do
+            echo "Checking: $file"
+            godot --headless --check-only --script "$file" 2>&1 || exit 1
+          done
+        continue-on-error: true

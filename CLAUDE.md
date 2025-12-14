@@ -17,11 +17,16 @@ godot project.godot
 # Run the game
 godot --path . scenes/main.tscn
 
-# Run determinism tests
+# Run all tests (unified runner)
+godot --headless --script run_tests.gd
+
+# Watch mode (auto-run tests on file changes)
+godot --headless --script run_tests.gd -- --watch
+
+# Individual test suites
 godot --headless --script packages/core/tests/test_determinism.gd
 godot --headless --script packages/procgen/tests/test_terrain.gd
-
-# Run graphics validation tests (32-bit color compliance)
+godot --headless --script packages/procgen/tests/test_generators.gd
 godot --headless --script packages/render/tests/test_graphics.gd
 ```
 
